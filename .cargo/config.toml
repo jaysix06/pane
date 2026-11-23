@@ -1,0 +1,3 @@
+[env]
+# Luau without its asserts: scripts run about a fifth faster (zgx docs/scripting.md, "Cost").
+LUAU_CXXFLAGS = "-DNDEBUG"

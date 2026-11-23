@@ -1,0 +1,34 @@
+[workspace]
+resolver = "3"
+members = ["crates/pane-fs", "crates/pane-shell", "crates/pane-app"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[workspace.dependencies]
+# zgx is 0.1 and still changes its API: pinned to one release tag.
+zgx = { git = "https://github.com/zeronsh/zgx", tag = "v0.1.10" }
+zgx-desktop = { git = "https://github.com/zeronsh/zgx", tag = "v0.1.10" }
+zgx-script = { git = "https://github.com/zeronsh/zgx", tag = "v0.1.10" }
+windows = { version = "0.62", default-features = false }
+futures-channel = "0.3"
+pane-fs = { path = "crates/pane-fs" }
+pane-shell = { path = "crates/pane-shell" }
+
+# zgx patches these in its own repository only; an app has to repeat the
+# patches to get the fixes (a covered Windows window keeps drawing otherwise,
+# and dropped files get no position). See zgx's docs/getting-started.md.
+[patch.crates-io]
+wgpu-hal = { git = "https://github.com/zeronsh/zgx", tag = "v0.1.10" }
+winit = { git = "https://github.com/zeronsh/zgx", tag = "v0.1.10" }
+accesskit_windows = { git = "https://github.com/zeronsh/zgx", tag = "v0.1.10" }
+accesskit_consumer = { git = "https://github.com/zeronsh/zgx", tag = "v0.1.10" }
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
