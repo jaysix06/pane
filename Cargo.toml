@@ -14,6 +14,9 @@ zgx-desktop = { git = "https://github.com/zeronsh/zgx", tag = "v0.1.10" }
 zgx-script = { git = "https://github.com/zeronsh/zgx", tag = "v0.1.10" }
 windows = { version = "0.62", default-features = false }
 futures-channel = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 pane-fs = { path = "crates/pane-fs" }
 pane-shell = { path = "crates/pane-shell" }
 

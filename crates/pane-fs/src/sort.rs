@@ -60,21 +60,47 @@ fn digit_run(s: &str) -> &str {
     &s[..end]
 }
 
-/// Sorts folders first, then by `key`, ties broken by name.
-pub fn sort_entries(entries: &mut [Entry], key: SortKey, descending: bool) {
-    entries.sort_by(|a, b| {
-        let folders = b.is_dir.cmp(&a.is_dir);
-        if folders != Ordering::Equal {
-            return folders;
+/// How to sort a folder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SortOptions {
+    pub key: SortKey,
+    pub descending: bool,
+    pub folders_first: bool,
+    /// Digits compared by value ("file2" before "file10"), as Explorer does.
+    pub natural: bool,
+}
+
+impl Default for SortOptions {
+    fn default() -> Self {
+        SortOptions { key: SortKey::Name, descending: false, folders_first: true, natural: true }
+    }
+}
+
+/// Sorts by `opts.key`, ties broken by name; folders stay first whichever
+/// way it runs when `folders_first` is set.
+pub fn sort_entries(entries: &mut [Entry], opts: SortOptions) {
+    let names = |a: &Entry, b: &Entry| {
+        if opts.natural {
+            natural_cmp(&a.name, &b.name)
+        } else {
+            a.name.to_lowercase().cmp(&b.name.to_lowercase())
         }
-        let ord = match key {
+    };
+    entries.sort_by(|a, b| {
+        if opts.folders_first {
+            let folders = b.is_dir.cmp(&a.is_dir);
+            if folders != Ordering::Equal {
+                return folders;
+            }
+        }
+        let ord = match opts.key {
             SortKey::Name => Ordering::Equal,
             SortKey::Modified => a.modified.cmp(&b.modified),
             SortKey::Type => a.extension().cmp(&b.extension()),
             SortKey::Size => a.size.cmp(&b.size),
         }
-        .then_with(|| natural_cmp(&a.name, &b.name));
-        if descending { ord.reverse() } else { ord }
+        .then_with(|| names(a, b));
+        if opts.descending { ord.reverse() } else { ord }
     });
 }
 
@@ -100,8 +126,16 @@ mod tests {
             system: false,
         };
         let mut v = vec![e("b.txt", false), e("z", true), e("a.txt", false), e("c", true)];
-        sort_entries(&mut v, SortKey::Name, false);
+        sort_entries(&mut v, SortOptions::default());
         let names: Vec<_> = v.iter().map(|e| e.name.as_str()).collect();
         assert_eq!(names, ["c", "z", "a.txt", "b.txt"]);
+
+        sort_entries(&mut v, SortOptions { descending: true, ..Default::default() });
+        let names: Vec<_> = v.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["z", "c", "b.txt", "a.txt"], "folders still first");
+
+        sort_entries(&mut v, SortOptions { folders_first: false, ..Default::default() });
+        let names: Vec<_> = v.iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, ["a.txt", "b.txt", "c", "z"]);
     }
 }

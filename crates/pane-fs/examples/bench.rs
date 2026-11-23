@@ -7,7 +7,7 @@ fn main() {
     let mut entries = pane_fs::list_dir(dir.as_ref()).unwrap();
     let list = t.elapsed();
     let t = Instant::now();
-    pane_fs::sort_entries(&mut entries, pane_fs::SortKey::Name, false);
+    pane_fs::sort_entries(&mut entries, pane_fs::SortOptions::default());
     let sort = t.elapsed();
     let t = Instant::now();
     let dates: Vec<String> = entries.iter().map(|e| pane_fs::format_modified(e.modified)).collect();

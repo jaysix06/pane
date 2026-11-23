@@ -2335,8 +2335,11 @@ name = "pane-app"
 version = "0.1.0"
 dependencies = [
  "futures-channel",
+ "futures-util",
  "pane-fs",
  "pane-shell",
+ "serde",
+ "serde_json",
  "zgx",
  "zgx-desktop",
  "zgx-script",

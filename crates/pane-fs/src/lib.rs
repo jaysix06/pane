@@ -3,9 +3,12 @@
 
 mod list;
 mod sort;
+mod watch;
 
 pub use list::list_dir;
-pub use sort::{SortKey, natural_cmp, sort_entries};
+pub use sort::{SortKey, SortOptions, natural_cmp, sort_entries};
+#[cfg(windows)]
+pub use watch::{Watcher, watch};
 
 /// One item in a folder.
 #[derive(Clone, Debug, PartialEq, Eq)]
