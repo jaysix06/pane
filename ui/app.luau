@@ -13,6 +13,7 @@ local customize = require("./components/customize")
 local confirm = require("./components/confirm")
 local commands = require("./components/commands")
 local OpsPanel = require("./components/ops_panel")
+local update_modal = require("./components/update_modal")
 
 -- Pane Amber, dark or light as Settings say (theme.luau).
 theme.follow(state.setting)
@@ -167,4 +168,5 @@ return ui.column {
 	},
 	customize.sheet(),
 	confirm.dialog(),
+	update_modal.dialog(),
 }

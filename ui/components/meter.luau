@@ -188,9 +188,14 @@ function M.meter(props: { [string]: any }): Node
 		if not el then
 			return
 		end
-		-- Columns this meter shows, from its laid-out width.
-		local cols = math.max(1, math.floor(((el.width or 600) + gap) / (dot + gap)))
-		local b = M.boundaries(props.data(), 1.1 / cols)
+		-- Columns this meter shows, from its laid-out width. Before layout
+		-- (width 0) assume a typical bar; on_resize applies again once the
+		-- real width is known.
+		local width = el.width or 0
+		local min_share = if width > (dot + gap) * 4
+			then 1.1 / math.floor((width + gap) / (dot + gap))
+			else 0.02
+		local b = M.boundaries(props.data(), min_share)
 		local params: { [string]: any } = {
 			duration = duration,
 			ease = "out(4)",
@@ -198,9 +203,12 @@ function M.meter(props: { [string]: any }): Node
 		for i = 1, 11 do
 			params[`shaderParam{i - 1}`] = b[i]
 		end
-		params.shaderParam12 = props.highlight and props.highlight() or 0
 		params.shaderParam13 = props.glow and props.glow() or 0.7
 		anime.animate(el, params)
+		-- The highlighted category is an index, not an amount: it switches
+		-- at once (easing it would pass through the categories between, or
+		-- through "none", and the highlight would flicker or vanish).
+		anime.utils.set(el, { shaderParam12 = props.highlight and props.highlight() or 0 })
 	end
 
 	-- Data or highlight changed: ease the bands to their new places.
@@ -248,6 +256,14 @@ function M.meter(props: { [string]: any }): Node
 	node.bg_shader = shader(dot, gap, ui.theme.kind() == "light")
 	node.label = props.label or "Storage meter"
 	node.role = "img"
+	-- The column count depends on the width: re-fit the bands when it changes.
+	local last_width = -1
+	node.on_resize = function(size)
+		if math.abs(size.w - last_width) >= 1 then
+			last_width = size.w
+			apply(0)
+		end
+	end
 	node.on_mount = function(el)
 		-- Start empty, then grow in: the reveal is the entrance.
 		local start = { duration = 0, shaderParam11 = 0, shaderParam13 = 0.7 }

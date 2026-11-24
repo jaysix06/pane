@@ -65,10 +65,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let ops = ops::Ops::start(&host, &cx.tasks);
             let updates = updates::start(&host, &cx.tasks, &app);
             {
-                let (u, a, t) = (updates.clone(), app.clone(), cx.tasks.clone());
-                host.action("update_check", move |_| updates::check(&u, &a, &t));
+                let (u, a) = (updates.clone(), app.clone());
+                host.action("update_check", move |_| updates::check(&u, &a));
                 let u = updates.clone();
                 host.action("update_open", move |_| updates::open(&u));
+                let u = updates.clone();
+                host.action("update_download", move |_| updates::download(&u));
+                let (u, w) = (updates.clone(), cx.window.clone());
+                host.action("update_install", move |_| updates::install(&u, &w));
+                let u = updates.clone();
+                host.action("update_retry", move |_| updates::reset_error(&u));
                 let (u, a) = (updates.clone(), app.clone());
                 host.action("update_dismiss", move |_| updates::dismiss(&u, &a));
             }

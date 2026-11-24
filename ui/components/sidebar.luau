@@ -7,6 +7,7 @@ local theme = require("../theme")
 local common = require("./common")
 local icons = require("./icons")
 local meter = require("./meter")
+local update_modal = require("./update_modal")
 
 local function is_here(path: string): () -> boolean
 	return function()
@@ -216,9 +217,42 @@ local function places_field(name: string): () -> { state.Place }
 	end
 end
 
--- "Update available": anchored at the sidebar's foot in the signature
--- colour, while a newer release is out (crates/pane-app/src/updates.rs).
+-- The update card: anchored at the sidebar's foot in the signature colour
+-- while a newer release is out. It follows the update's phase: available
+-- ("Get the update" downloads it and shows the dialog), downloading (its
+-- progress; click to see the dialog), ready ("Update now"), or failed.
+-- Rust: crates/pane-app/src/updates.rs.
+local function card_button(label: string, icon: string, on_click: () -> ()): Node
+	return ui.button {
+		label = label,
+		on_click = on_click,
+		w_full = true,
+		h = 30,
+		gap = 6,
+		rounded = "$radius.md",
+		bg = "#0000002E",
+		color = "$accent.text",
+		hover = { bg = "#00000047" },
+		items = "center",
+		justify = "center",
+		icons.icon(icon, 14, "$accent.text"),
+		ui.text { label, weight = 600, text_size = 12.5 },
+	}
+end
+
 local function update_card(): Node
+	local function u(): any
+		return state.update:get() or {}
+	end
+	local function phase(): string
+		return u().phase or "available"
+	end
+	local titles = {
+		available = "Update available",
+		downloading = "Downloading update",
+		ready = "Update ready",
+		error = "Update failed",
+	}
 	return ui.show(
 		function()
 			return state.update:get() ~= nil
@@ -234,8 +268,7 @@ local function update_card(): Node
 			inset_shadow = { x = 0, y = 1, color = "#FFFFFF33" },
 			role = "status",
 			label = function()
-				local u = state.update:get()
-				return if u then `Pane {u.version} is available` else ""
+				return `{titles[phase()] or ""}: Pane {u().version or ""}`
 			end,
 			on_mount = function(el)
 				if theme.motion(state.setting)() then
@@ -246,48 +279,88 @@ local function update_card(): Node
 				w_full = true,
 				gap = 8,
 				items = "center",
-				icons.icon("sparkle", 16, "$accent.text"),
-				ui.text { "Update available", weight = 700, grow = 1 },
-				ui.button {
-					label = "Later",
-					tooltip = "Not now (hides this version)",
-					on_click = ui.action("update_dismiss"),
-					w = 22,
-					h = 22,
-					p = 0,
-					rounded = "$radius.sm",
-					bg = "#00000000",
-					color = "$accent.text",
-					hover = { bg = "#0000001F" },
-					items = "center",
-					justify = "center",
-					icons.icon("close", 12, "$accent.text"),
+				ui.switch(phase, {
+					available = icons.icon("sparkle", 16, "$accent.text"),
+					downloading = icons.icon("download", 16, "$accent.text"),
+					ready = icons.icon("check", 16, "$accent.text"),
+					error = icons.icon("warning", 16, "$accent.text"),
+				}),
+				ui.text {
+					function()
+						return titles[phase()] or ""
+					end,
+					weight = 700,
+					grow = 1,
 				},
+				-- Only an update that is merely available can be put off.
+				ui.show(
+					function()
+						return phase() == "available"
+					end,
+					ui.button {
+						label = "Later",
+						tooltip = "Not now (hides this version)",
+						on_click = ui.action("update_dismiss"),
+						w = 22,
+						h = 22,
+						p = 0,
+						rounded = "$radius.sm",
+						bg = "#00000000",
+						color = "$accent.text",
+						hover = { bg = "#0000001F" },
+						items = "center",
+						justify = "center",
+						icons.icon("close", 12, "$accent.text"),
+					}
+				),
 			},
 			ui.text {
 				function()
-					local u = state.update:get()
-					return if u then `Pane {u.version} is ready. You have {u.current}.` else ""
+					local x = u()
+					local p = phase()
+					if p == "downloading" then
+						return `{x.done_text or ""} of {x.total_text or ""}`
+					elseif p == "ready" then
+						return `Pane {x.version} is downloaded. Restart to finish.`
+					elseif p == "error" then
+						return "The download didn't finish."
+					end
+					return `Pane {x.version} is out. You have {x.current}.`
 				end,
 				text_size = 12,
 				wrap = true,
 				opacity = 0.85,
 			},
-			ui.button {
-				label = "See what's new",
-				on_click = ui.action("update_open"),
-				w_full = true,
-				h = 30,
-				gap = 6,
-				rounded = "$radius.md",
-				bg = "#0000002E",
-				color = "$accent.text",
-				hover = { bg = "#00000047" },
-				items = "center",
-				justify = "center",
-				icons.icon("download", 14, "$accent.text"),
-				ui.text { "Get the update", weight = 600, text_size = 12.5 },
-			},
+			ui.show(
+				function()
+					return phase() == "downloading"
+				end,
+				ui.div {
+					w_full = true,
+					h = 4,
+					rounded = "$radius.full",
+					bg = "#00000033",
+					overflow = "hidden",
+					ui.div {
+						h_full = true,
+						w = function()
+							return `{math.max(2, math.floor((u().progress or 0) * 100))}%`
+						end,
+						rounded = "$radius.full",
+						bg = "$accent.text",
+					},
+				}
+			),
+			ui.switch(phase, {
+				available = card_button("Get the update", "download", update_modal.start),
+				downloading = card_button("Show progress", "download", function()
+					update_modal.open:set(true)
+				end),
+				ready = card_button("Update now", "refresh", function()
+					ui.invoke("update_install")
+				end),
+				error = card_button("Try again", "refresh", update_modal.start),
+			}),
 		}
 	)
 end

@@ -46,8 +46,28 @@ fn start_menu_link() -> Option<PathBuf> {
 
 // ---------------------------------------------------------------- install
 
-pub fn install(quiet: bool) -> i32 {
+pub struct Options {
+    /// No dialogs.
+    pub quiet: bool,
+    /// Started by Pane's updater: give Pane time to close by itself first.
+    pub update: bool,
+    /// Open Pane when done.
+    pub relaunch: bool,
+}
+
+pub fn install(opts: Options) -> i32 {
+    let quiet = opts.quiet;
     let dir = install_dir();
+    if opts.update {
+        // Pane closes its window right after starting this: wait for it
+        // (up to 15 s) before anything is replaced.
+        for _ in 0..150 {
+            if running_in(&dir).is_empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
     if !quiet {
         let text = format!(
             "Install Pane {VERSION}?\n\nPane will be installed for you in\n{}\nand added to the Start menu. No administrator rights are needed.",
@@ -62,14 +82,22 @@ pub fn install(quiet: bool) -> i32 {
     }
     match do_install(&dir) {
         Ok(()) => {
-            if !quiet && ask(&format!("Pane {VERSION} is installed.\n\nOpen it now?"), MB_YESNO | MB_ICONINFORMATION) == IDYES.0 {
+            if opts.relaunch {
+                launch(&dir.join("pane.exe"));
+            } else if !quiet && ask(&format!("Pane {VERSION} is installed.\n\nOpen it now?"), MB_YESNO | MB_ICONINFORMATION) == IDYES.0 {
                 launch(&dir.join("pane.exe"));
             }
             0
         }
         Err(e) => {
-            if !quiet {
-                ask(&format!("Pane couldn't be installed:\n\n{e}"), MB_OK | MB_ICONERROR);
+            // A failed update still says so: the person is waiting for Pane
+            // to come back. Then the old version opens again if it's there.
+            if !quiet || opts.update {
+                let what = if opts.update { "updated" } else { "installed" };
+                ask(&format!("Pane couldn't be {what}:\n\n{e}"), MB_OK | MB_ICONERROR);
+            }
+            if opts.relaunch && dir.join("pane.exe").exists() {
+                launch(&dir.join("pane.exe"));
             }
             2
         }
