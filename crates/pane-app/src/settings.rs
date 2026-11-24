@@ -79,6 +79,11 @@ pub struct Settings {
 
     // Advanced
     pub thumbnail_threads: u32,
+
+    // Updates (GitHub releases)
+    pub check_updates: bool,
+    /// A version the person said "Later" to: not offered again.
+    pub dismissed_update: String,
 }
 
 impl Default for Settings {
@@ -122,6 +127,8 @@ impl Default for Settings {
             search_max_depth: 32,
             shortcuts: BTreeMap::new(),
             thumbnail_threads: 2,
+            check_updates: true,
+            dismissed_update: String::new(),
         }
     }
 }

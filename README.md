@@ -55,3 +55,7 @@ Scan a drive from the command line: `cargo run --release -p pane-scan --example 
 ## Design
 
 Fonts: [Geist Mono](https://github.com/vercel/geist-font) (SIL Open Font License, `assets/fonts/GeistMono-OFL.txt`) for numbers and paths; Segoe UI Variable for text. Icons are Pane's own (`ui/components/icons.luau`).
+
+## Updates
+
+Pane checks this repository's [GitHub releases](https://github.com/jaysix06/pane/releases) a few seconds after it opens and every 6 hours. When the latest release (not a draft or pre-release) is newer than the running build, a card in the signature colour appears at the foot of the sidebar; "Later" hides that version. To publish one: bump `version` in the root `Cargo.toml` (`[workspace.package]`), build, then create a release tagged `vX.Y.Z`. Set `check_updates` to `false` in settings to turn checks off. `PANE_FAKE_UPDATE=0.2.0` pretends a release exists, for trying the card.

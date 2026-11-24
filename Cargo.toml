@@ -17,6 +17,7 @@ futures-channel = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+ureq = "3"
 pane-fs = { path = "crates/pane-fs" }
 pane-shell = { path = "crates/pane-shell" }
 pane-scan = { path = "crates/pane-scan" }

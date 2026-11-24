@@ -216,11 +216,91 @@ local function places_field(name: string): () -> { state.Place }
 	end
 end
 
+-- "Update available": anchored at the sidebar's foot in the signature
+-- colour, while a newer release is out (crates/pane-app/src/updates.rs).
+local function update_card(): Node
+	return ui.show(
+		function()
+			return state.update:get() ~= nil
+		end,
+		ui.column {
+			w_full = true,
+			p = 12,
+			gap = 10,
+			rounded = "$radius.lg",
+			bg = "$accent",
+			color = "$accent.text",
+			shadow = { x = 0, y = 6, blur = 22, spread = 0, color = "$app.glow" },
+			inset_shadow = { x = 0, y = 1, color = "#FFFFFF33" },
+			role = "status",
+			label = function()
+				local u = state.update:get()
+				return if u then `Pane {u.version} is available` else ""
+			end,
+			on_mount = function(el)
+				if theme.motion(state.setting)() then
+					anime.animate(el, { opacity = { 0, 1 }, translateY = { 12, 0 }, duration = 420, ease = "out(4)" })
+				end
+			end,
+			ui.row {
+				w_full = true,
+				gap = 8,
+				items = "center",
+				icons.icon("sparkle", 16, "$accent.text"),
+				ui.text { "Update available", weight = 700, grow = 1 },
+				ui.button {
+					label = "Later",
+					tooltip = "Not now (hides this version)",
+					on_click = ui.action("update_dismiss"),
+					w = 22,
+					h = 22,
+					p = 0,
+					rounded = "$radius.sm",
+					bg = "#00000000",
+					color = "$accent.text",
+					hover = { bg = "#0000001F" },
+					items = "center",
+					justify = "center",
+					icons.icon("close", 12, "$accent.text"),
+				},
+			},
+			ui.text {
+				function()
+					local u = state.update:get()
+					return if u then `Pane {u.version} is ready. You have {u.current}.` else ""
+				end,
+				text_size = 12,
+				wrap = true,
+				opacity = 0.85,
+			},
+			ui.button {
+				label = "See what's new",
+				on_click = ui.action("update_open"),
+				w_full = true,
+				h = 30,
+				gap = 6,
+				rounded = "$radius.md",
+				bg = "#0000002E",
+				color = "$accent.text",
+				hover = { bg = "#00000047" },
+				items = "center",
+				justify = "center",
+				icons.icon("download", 14, "$accent.text"),
+				ui.text { "Get the update", weight = 600, text_size = 12.5 },
+			},
+		}
+	)
+end
+
 return function(): Node
-	return ui.scroll {
+	return ui.column {
 		w = 240,
 		h_full = true,
 		shrink = 0,
+		ui.scroll {
+		w_full = true,
+		grow = 1,
+		min_h = 0,
 		px = 8,
 		pb = 8,
 		gap = 0,
@@ -256,5 +336,7 @@ return function(): Node
 				return drive_row(place)
 			end),
 		},
+	},
+		ui.div { w_full = true, px = 8, pb = 8, update_card() },
 	}
 end

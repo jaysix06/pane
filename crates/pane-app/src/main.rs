@@ -11,6 +11,7 @@ mod selection;
 mod service;
 mod settings;
 mod storage;
+mod updates;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -62,6 +63,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let app = app::App::start(&host, &cx.tasks, start.clone());
             let storage = storage::Storage::start(&host, &cx.tasks);
             let ops = ops::Ops::start(&host, &cx.tasks);
+            let updates = updates::start(&host, &cx.tasks, &app);
+            {
+                let (u, a, t) = (updates.clone(), app.clone(), cx.tasks.clone());
+                host.action("update_check", move |_| updates::check(&u, &a, &t));
+                let u = updates.clone();
+                host.action("update_open", move |_| updates::open(&u));
+                let (u, a) = (updates.clone(), app.clone());
+                host.action("update_dismiss", move |_| updates::dismiss(&u, &a));
+            }
             register_actions(&host, &app, cx.window.clone());
             register_storage_actions(&host, &app, &storage, &ops);
             register_ops_actions(&host, &app, &ops);

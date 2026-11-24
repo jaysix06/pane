@@ -47,6 +47,8 @@ M.toast = ui.shared("toast", nil :: { message: string, at: number }?)
 -- The Storage Overview (crates/pane-app/src/storage.rs).
 M.storage = ui.shared("storage", nil :: any)
 
+-- A newer release on GitHub: { version, current, name, url, notes }, or nil.
+M.update = ui.shared("update", nil :: any)
 -- File operations in progress (crates/pane-app/src/ops.rs).
 M.ops = ui.shared("ops", {} :: { any })
 -- Cut items: { folder, ids }, dimmed while that folder shows.
