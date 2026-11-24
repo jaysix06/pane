@@ -1,0 +1,27 @@
+// Pane's icon and version information (embedded by build.rs).
+1 ICON "../../assets/pane.ico"
+
+1 VERSIONINFO
+FILEVERSION     PANE_V1, PANE_V2, PANE_V3, 0
+PRODUCTVERSION  PANE_V1, PANE_V2, PANE_V3, 0
+FILEOS          0x40004
+FILETYPE        0x1
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "Pane"
+      VALUE "FileDescription", "Pane Setup"
+      VALUE "FileVersion", PANE_VERSION
+      VALUE "InternalName", "pane-setup"
+      VALUE "OriginalFilename", "pane-setup.exe"
+      VALUE "ProductName", "Pane"
+      VALUE "ProductVersion", PANE_VERSION
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END

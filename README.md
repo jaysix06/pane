@@ -59,3 +59,9 @@ Fonts: [Geist Mono](https://github.com/vercel/geist-font) (SIL Open Font License
 ## Updates
 
 Pane checks this repository's [GitHub releases](https://github.com/jaysix06/pane/releases) a few seconds after it opens and every 6 hours. When the latest release (not a draft or pre-release) is newer than the running build, a card in the signature colour appears at the foot of the sidebar; "Later" hides that version. To publish one: bump `version` in the root `Cargo.toml` (`[workspace.package]`), build, then create a release tagged `vX.Y.Z`. Set `check_updates` to `false` in settings to turn checks off. `PANE_FAKE_UPDATE=0.2.0` pretends a release exists, for trying the card.
+
+## Install
+
+Download `Pane-Setup-x.y.z.exe` from the [latest release](https://github.com/jaysix06/pane/releases/latest) and run it. Pane installs for your account only (no administrator rights) into `%LOCALAPPDATA%\Programs\Pane`, adds itself to the Start menu, and can be removed from Settings → Apps. The installer isn't code-signed yet, so Windows SmartScreen may warn on first run: choose "More info" → "Run anyway".
+
+Build the installer yourself with `scripts\build-installer.ps1` (writes `dist\Pane-Setup-<version>.exe`).

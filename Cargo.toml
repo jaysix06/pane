@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/pane-fs", "crates/pane-shell", "crates/pane-scan", "crates/pane-scan-service", "crates/pane-app"]
+members = ["crates/pane-fs", "crates/pane-shell", "crates/pane-scan", "crates/pane-scan-service", "crates/pane-app", "crates/pane-setup"]
 
 [workspace.package]
 version = "0.1.0"
@@ -37,3 +37,4 @@ opt-level = 2
 [profile.release]
 lto = "thin"
 codegen-units = 1
+strip = true
