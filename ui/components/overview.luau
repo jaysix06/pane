@@ -13,6 +13,19 @@ local confirm = require("./confirm")
 local motion = theme.motion(state.setting)
 local hovered = ui.state("overview_hover", 0)
 
+-- The category to isolate on the bar: the hovered one, unless it holds
+-- nothing on this drive (then there's nothing to show, and dimming every
+-- band would leave the bar dark).
+local function highlighted(): number
+	local h = hovered:get()
+	if h == 0 then
+		return 0
+	end
+	local c = theme.categories[h]
+	local bytes = ((state.storage:get() or {}).bytes or {})[c and c.id or ""] or 0
+	return if bytes > 0 then h else 0
+end
+
 local function storage(): any
 	return state.storage:get() or {}
 end
@@ -240,7 +253,7 @@ local function legend_item(c: any, index: number): Node
 		return { bytes = 0, text = "0 B", share = 0 }
 	end
 	local function dim(): boolean
-		local h = hovered:get()
+		local h = highlighted()
 		return h ~= 0 and h ~= index
 	end
 	return ui.row {
@@ -256,7 +269,13 @@ local function legend_item(c: any, index: number): Node
 		hover = { bg = "$hover" },
 		opacity = ui.tween(ui.computed(dim), { from = 1, to = 0.38, duration = 160 }),
 		on_hover = function(inside: boolean)
-			hovered:set(if inside then index else 0)
+			if inside then
+				hovered:set(index)
+			elseif hovered:peek() == index then
+				-- Only clear our own: moving straight to the next item can
+				-- report its enter before this leave.
+				hovered:set(0)
+			end
 		end,
 		on_click = function()
 			ui.invoke("storage_drill", c.id)
@@ -352,9 +371,7 @@ local function hero(): Node
 				scanning = function()
 					return storage().phase == "scanning"
 				end,
-				highlight = function()
-					return hovered:get()
-				end,
+				highlight = highlighted,
 				glow = glow,
 				motion = motion,
 				dot = 7,

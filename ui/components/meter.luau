@@ -128,14 +128,17 @@ export type MeterData = {
 }
 
 -- The 11 cumulative boundaries (fractions of the drive) for `data`.
-function M.boundaries(data: MeterData?): { number }
+-- `min_share`: the narrowest a non-empty band may be (a fraction of the
+-- bar): at least one whole column, or a tiny category's band falls between
+-- two columns' centres and no dot lights for it.
+function M.boundaries(data: MeterData?, min_share: number?): { number }
 	local out = table.create(11, 0)
 	if not data or data.total <= 0 then
 		return out
 	end
-	-- Every non-empty category gets at least a sliver (~0.8%) so it stays
-	-- visible as a column; the extra is taken from the biggest band.
-	local MIN = 0.008
+	-- Every non-empty category gets at least one column so it stays
+	-- visible; the extra is taken from the biggest band.
+	local MIN = min_share or 0.02
 	local shares = {}
 	local biggest, big_i = 0, 1
 	for i, c in theme.categories do
@@ -185,7 +188,9 @@ function M.meter(props: { [string]: any }): Node
 		if not el then
 			return
 		end
-		local b = M.boundaries(props.data())
+		-- Columns this meter shows, from its laid-out width.
+		local cols = math.max(1, math.floor(((el.width or 600) + gap) / (dot + gap)))
+		local b = M.boundaries(props.data(), 1.1 / cols)
 		local params: { [string]: any } = {
 			duration = duration,
 			ease = "out(4)",
