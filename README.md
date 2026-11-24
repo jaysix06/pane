@@ -39,8 +39,12 @@ zgx is pinned to the `v0.1.10` tag, and its patched `winit`, `wgpu-hal` and Acce
 | Letters | Jump to the next item starting with them |
 | Enter | Open the selection |
 | Ctrl+A, Esc | Select all, select none |
+| Ctrl+C, Ctrl+X, Ctrl+V | Copy, cut, paste (works with Explorer's clipboard both ways) |
+| Del, Shift+Del | To the Recycle Bin (asks first if set), delete permanently (always asks) |
+| F2 | Rename in place |
+| Ctrl+Shift+N | New folder (named in place) |
 
-Middle click opens a folder in a new tab, or closes a tab. Settings live in `%APPDATA%\Pane\settings.json`.
+Middle click opens a folder in a new tab, or closes a tab. Drag items onto folders, sidebar places or breadcrumbs to move them (copy across drives, or hold Ctrl); rest a drag on a folder to open it. Drag out to other apps, or in from them. Right-click empty space for the folder's own menu (New, Paste, ...). Copies, moves and deletes run through Windows' own engine (its conflict dialogs and undo included) with Pane's progress cards. Settings live in `%APPDATA%\Pane\settings.json`.
 
 ## Instant scans
 

@@ -55,6 +55,27 @@ local function row(props: {
 		end,
 		hover = { bg = "$hover", color = "$text.primary" },
 		on_click = open_place(props.path),
+		-- A place takes dropped files (moved within a drive, copied across)
+		-- and opens when a drag rests on it.
+		drop_when = function(payload: any)
+			return type(payload) == "table" and payload.paths ~= nil and string.sub(props.path, 1, 2) ~= "::"
+		end,
+		on_drop = function(payload: any)
+			ui.invoke("drop", { paths = payload.paths, target = props.path, copy = ui.modifiers.control:peek() })
+		end,
+		on_file_drop = function(files)
+			local paths = {}
+			for _, f in files do
+				table.insert(paths, f.path)
+			end
+			if string.sub(props.path, 1, 2) ~= "::" then
+				ui.invoke("drop", { paths = paths, target = props.path, copy = ui.modifiers.control:peek() })
+			end
+		end,
+		on_drag_spring = function()
+			ui.invoke("navigate", props.path)
+			return true
+		end,
 		on_aux_click = function(e)
 			if e.button == "middle" then
 				ui.invoke("navigate_new_tab", props.path)

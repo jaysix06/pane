@@ -17,6 +17,8 @@ function M.icon_button(props: {
 	local size = props.size or 32
 	return ui.button {
 		tooltip = props.label,
+		-- Below: above would cover the tab strip.
+		tooltip_placement = { side = "bottom", align = "center", offset = 6 },
 		label = props.label,
 		disabled = if props.enabled
 			then function()
@@ -80,6 +82,24 @@ function M.check_item(label: string, checked: () -> boolean, on_click: () -> ())
 				w = 14,
 				color = "$accent",
 				ui.show(checked, icons.icon("check", 14)),
+			},
+			ui.text { label },
+		},
+	}
+end
+
+-- A plain menu entry, lined up with check items (an icon in their column).
+function M.menu_item(label: string, on_click: () -> (), icon: string?): Node
+	return ui.menu_item {
+		label = label,
+		on_click = on_click,
+		ui.row {
+			gap = 8,
+			items = "center",
+			ui.div {
+				w = 14,
+				color = "$text.tertiary",
+				ui.show(icon ~= nil, icons.icon(icon or "dots", 14)),
 			},
 			ui.text { label },
 		},

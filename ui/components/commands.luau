@@ -1,0 +1,95 @@
+-- File commands shared by the keyboard, the toolbar and menus.
+
+local state = require("../state")
+local confirm = require("./confirm")
+
+local M = {}
+
+local function in_folder(): boolean
+	local n = state.nav:peek()
+	return n ~= nil and not n.overview and not n.this_pc
+end
+
+local function what(): string
+	local sel = state.sel:peek()
+	if sel.count == 1 then
+		for id in sel.ids do
+			return `"{id}"`
+		end
+	end
+	return `{sel.count} items`
+end
+
+-- Delete / Shift+Delete: to the Recycle Bin, or permanently after asking.
+function M.delete(shift: boolean?)
+	if not in_folder() or state.sel:peek().count == 0 then
+		return
+	end
+	local permanent = shift == true or state.setting("delete_permanently") == true
+	if permanent then
+		confirm.ask {
+			title = "Delete permanently?",
+			body = `{what()} will be deleted for good. This can't be undone.`,
+			label = "Delete permanently",
+			danger = true,
+			action = "delete",
+			arg = { permanent = true, confirmed = true },
+		}
+	elseif state.setting("confirm_delete") then
+		confirm.ask {
+			title = "Move to Recycle Bin?",
+			body = `{what()} will go to the Recycle Bin. You can restore it from there.`,
+			label = "Move to Recycle Bin",
+			action = "delete",
+			arg = { permanent = false },
+		}
+	else
+		ui.invoke("delete", { permanent = false })
+	end
+end
+
+function M.rename()
+	if in_folder() and state.sel:peek().count > 0 then
+		ui.invoke("start_rename")
+	end
+end
+
+function M.new_folder()
+	if in_folder() then
+		ui.invoke("new_folder")
+	end
+end
+
+function M.copy()
+	if in_folder() then
+		ui.invoke("copy")
+	end
+end
+
+function M.cut()
+	if in_folder() then
+		ui.invoke("cut")
+	end
+end
+
+function M.paste()
+	if in_folder() then
+		ui.invoke("paste")
+	end
+end
+
+M.in_folder = in_folder
+
+-- Rust asks a row to start renaming (a new folder, the menu's Rename).
+local last_request = 0
+ui.effect(function()
+	local r = state.rename_request:get()
+	-- Only fresh requests: an old one (seen again after a reload) would
+	-- put a row that may be gone into rename mode and hold the keyboard.
+	if r and r.at ~= last_request and math.abs(ui.now() - r.at) < 3000 then
+		last_request = r.at
+		state.renaming:set(r.id)
+	end
+end)
+
+return M

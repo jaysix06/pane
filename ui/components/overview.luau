@@ -8,6 +8,7 @@ local theme = require("../theme")
 local common = require("./common")
 local icons = require("./icons")
 local meter = require("./meter")
+local confirm = require("./confirm")
 
 local motion = theme.motion(state.setting)
 local hovered = ui.state("overview_hover", 0)
@@ -24,6 +25,28 @@ end
 
 local function glow(): number
 	return (state.setting("glow") or 70) / 100
+end
+
+-- A path shortened in the middle to about `max` characters, keeping the
+-- drive and the last parts: long paths with no spaces can't be cut at a
+-- word, so the text's own truncation would leave just "C:...".
+local function short_path(path: string, max: number): string
+	if #path <= max then
+		return path
+	end
+	local parts = string.split(path, "\\")
+	local head = parts[1]
+	local tail = parts[#parts]
+	local i = #parts - 1
+	while i > 1 and #head + #tail + #parts[i] + 6 <= max do
+		tail = parts[i] .. "\\" .. tail
+		i -= 1
+	end
+	local out = head .. "\\…\\" .. tail
+	if #out > max then
+		out = string.sub(out, 1, max - 3) .. "..."
+	end
+	return out
 end
 
 local function category_meta(id: string)
@@ -385,6 +408,12 @@ local function drill_panel(): Node
 			w_full = true,
 			p = 20,
 			gap = 12,
+			-- Opening it brings it into view (it sits below the hero).
+			focusable = true,
+			label = "Biggest places",
+			on_mount = function(el)
+				el:focus()
+			end,
 			ui.row {
 				w_full = true,
 				gap = 10,
@@ -439,7 +468,14 @@ local function drill_panel(): Node
 								bg = colour,
 							},
 						},
-						ui.text { item.path, literal = true, font = "$font.mono", text_size = 10.5, color = "$text.tertiary", truncate = true },
+						ui.text {
+							short_path(item.path, 96),
+							literal = true,
+							font = "$font.mono",
+							text_size = 10.5,
+							color = "$text.tertiary",
+							truncate = true,
+						},
 					},
 					ui.div { color = "$text.tertiary", icons.icon("external", 14) },
 				}
@@ -503,7 +539,7 @@ local function cleanup_card(c: any): Node
 			},
 		},
 		ui.text {
-			if top then top.path else " ",
+			if top then short_path(top.path, 52) else " ",
 			literal = true,
 			font = "$font.mono",
 			text_size = 10.5,
@@ -538,6 +574,31 @@ local function cleanup_card(c: any): Node
 					color = "$danger",
 					hover = { bg = theme.alpha("#FF5D4D", 0.22) },
 					ui.text { "Empty…", text_size = 12.5 },
+				}
+			),
+			-- Temporary files: cleared for good (moving them to the Recycle
+			-- Bin would free nothing), after asking.
+			ui.show(
+				c.id == "temp" and not empty,
+				ui.button {
+					label = "Clear temporary files",
+					on_click = function()
+						confirm.ask {
+							title = "Clear temporary files?",
+							body = `About {c.text} of temporary files will be deleted for good. Files apps are using right now are skipped. This can't be undone.`,
+							label = "Clear",
+							danger = true,
+							action = "clean_temp",
+							arg = { confirmed = true },
+						}
+					end,
+					px = 12,
+					h = 28,
+					rounded = "$radius.md",
+					bg = theme.alpha("#FF5D4D", 0.14),
+					color = "$danger",
+					hover = { bg = theme.alpha("#FF5D4D", 0.22) },
+					ui.text { "Clear…", text_size = 12.5 },
 				}
 			),
 		},

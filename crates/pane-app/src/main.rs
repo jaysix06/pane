@@ -6,6 +6,7 @@
 mod app;
 mod icons;
 mod nav;
+mod ops;
 mod selection;
 mod service;
 mod settings;
@@ -60,8 +61,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let app = app::App::start(&host, &cx.tasks, start.clone());
             let storage = storage::Storage::start(&host, &cx.tasks);
+            let ops = ops::Ops::start(&host, &cx.tasks);
             register_actions(&host, &app, cx.window.clone());
-            register_storage_actions(&host, &app, &storage);
+            register_storage_actions(&host, &app, &storage, &ops);
+            register_ops_actions(&host, &app, &ops);
 
             if let Err(e) = host.reload() {
                 eprintln!("script error: {e}");
@@ -160,22 +163,6 @@ fn register_actions(host: &ScriptHost, app: &AppRef, window: zgx_desktop::Window
         }
     });
 
-    // The shell's menu for the row right-clicked (and the rest of the
-    // selection when it is part of it).
-    on("context_menu", |a, arg| {
-        let Some(i) = index_arg(arg) else { return };
-        app::ensure_selected(a, i);
-        let (paths, folder) = {
-            let app = a.borrow();
-            let tab = app.tab();
-            (tab.selected_paths(), tab.history.current.clone())
-        };
-        match pane_shell::show_context_menu(pane_shell::active_window(), &paths) {
-            Ok(pane_shell::MenuOutcome::Invoked(_)) if matches!(folder, Location::Folder(_)) => app::refresh(a),
-            Ok(_) => {}
-            Err(e) => a.borrow().toast(&format!("The menu couldn't open: {e}")),
-        }
-    });
 
     // Sort and view
     on("sort", |a, arg| {
@@ -227,7 +214,86 @@ fn register_actions(host: &ScriptHost, app: &AppRef, window: zgx_desktop::Window
 }
 
 /// The Overview's actions.
-fn register_storage_actions(host: &ScriptHost, app: &AppRef, storage: &storage::StorageRef) {
+/// File operations, the clipboard, and the shell's menus.
+fn register_ops_actions(host: &ScriptHost, app: &AppRef, ops: &ops::OpsRef) {
+    let on = |name: &str, f: fn(&AppRef, &ops::OpsRef, &Value)| {
+        let (app, ops) = (app.clone(), ops.clone());
+        host.action(name, move |arg| f(&app, &ops, &arg));
+    };
+    on("copy", |a, o, _| ops::copy(o, a, false));
+    on("cut", |a, o, _| ops::copy(o, a, true));
+    on("paste", |a, o, _| ops::paste(o, a));
+    // { permanent, confirmed }
+    on("delete", |a, o, arg| ops::delete(o, a, flag(arg, "permanent"), flag(arg, "confirmed")));
+    // { index, name }
+    on("rename", |a, o, arg| {
+        if let (Some(i), Some(name)) = (arg.field("index").and_then(index_arg), arg.field("name").and_then(str_arg)) {
+            ops::rename(o, a, i, name);
+        }
+    });
+    on("start_rename", |a, o, _| {
+        let name = {
+            let app = a.borrow();
+            let tab = app.tab();
+            tab.selection.focus().or_else(|| tab.selection.indices().next()).and_then(|i| tab.entries.get(i)).map(|e| e.name.clone())
+        };
+        if let Some(name) = name {
+            ops::request_rename(o, &name);
+        }
+    });
+    on("new_folder", |a, o, _| ops::new_folder(o, a));
+    // { paths = { ... }, target, copy }: files dropped on a folder.
+    on("drop", |a, o, arg| {
+        let paths: Vec<PathBuf> = match arg.field("paths") {
+            Some(Value::List(items)) => items.iter().filter_map(str_arg).map(PathBuf::from).collect(),
+            _ => Vec::new(),
+        };
+        let target = match arg.field("target").and_then(str_arg) {
+            Some(t) => PathBuf::from(t),
+            None => match &a.borrow().tab().history.current {
+                Location::Folder(p) => p.clone(),
+                _ => return,
+            },
+        };
+        ops::drop_files(o, a, paths, target, flag(arg, "copy"));
+    });
+    // The shell's menu for the row right-clicked (and the rest of the
+    // selection when it is part of it).
+    on("context_menu", |a, o, arg| {
+        let Some(i) = index_arg(arg) else { return };
+        app::ensure_selected(a, i);
+        let (paths, folder) = {
+            let app = a.borrow();
+            let tab = app.tab();
+            (tab.selected_paths(), tab.history.current.clone())
+        };
+        match pane_shell::show_context_menu(pane_shell::active_window(), &paths) {
+            Ok(pane_shell::MenuOutcome::Rename) => {
+                if let Some(name) = paths.first().and_then(|p| p.file_name()) {
+                    ops::request_rename(o, &name.to_string_lossy());
+                }
+            }
+            Ok(pane_shell::MenuOutcome::Invoked(_)) if matches!(folder, Location::Folder(_)) => app::refresh(a),
+            Ok(_) => {}
+            Err(e) => a.borrow().toast(&format!("The menu couldn't open: {e}")),
+        }
+    });
+    // Right-click on empty space: the folder's own menu (New, Paste, …).
+    on("background_menu", |a, _, _| {
+        let folder = match &a.borrow().tab().history.current {
+            Location::Folder(p) => p.clone(),
+            _ => return,
+        };
+        app::select_none(a);
+        match pane_shell::show_background_menu(pane_shell::active_window(), &folder) {
+            Ok(pane_shell::MenuOutcome::Invoked(_)) => app::refresh(a),
+            Ok(_) => {}
+            Err(e) => a.borrow().toast(&format!("The menu couldn't open: {e}")),
+        }
+    });
+}
+
+fn register_storage_actions(host: &ScriptHost, app: &AppRef, storage: &storage::StorageRef, ops: &ops::OpsRef) {
     let on = |name: &str, f: fn(&AppRef, &storage::StorageRef, &Value)| {
         let (app, storage) = (app.clone(), storage.clone());
         host.action(name, move |arg| f(&app, &storage, &arg));
@@ -252,6 +318,18 @@ fn register_storage_actions(host: &ScriptHost, app: &AppRef, storage: &storage::
     });
     on("enable_instant_scan", |_, s, _| storage::set_instant(s, true));
     on("remove_instant_scan", |_, s, _| storage::set_instant(s, false));
+    // Temporary files, cleared for good after the UI confirmed.
+    {
+        let (app, storage, ops) = (app.clone(), storage.clone(), ops.clone());
+        host.action("clean_temp", move |arg| {
+            if !flag(&arg, "confirmed") {
+                return;
+            }
+            let folders = storage::cleanup_folders(&storage, "temp");
+            let s2 = storage.clone();
+            ops::purge_contents(&ops, &app, folders, Box::new(move |_| storage::rescan(&s2)));
+        });
+    }
     on("empty_recycle_bin", |_, s, _| {
         if pane_shell::empty_recycle_bin(pane_shell::active_window()) {
             storage::recycle_bin_emptied(s);

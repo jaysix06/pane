@@ -25,7 +25,7 @@ M.categories = {
 	{ id = "videos", label = "Videos", color = "#FF5D8F", icon = "video" },
 	{ id = "music", label = "Music", color = "#4FE0B0", icon = "music" },
 	{ id = "documents", label = "Documents", color = "#7FA8FF", icon = "doc" },
-	{ id = "caches", label = "Caches & temp", color = "#E8D35A", icon = "broom" },
+	{ id = "caches", label = "Caches", color = "#E8D35A", icon = "broom" },
 	{ id = "system", label = "System", color = "#8C8478", icon = "chip" },
 	{ id = "recycle", label = "Recycle Bin", color = "#FF5D4D", icon = "trash" },
 	{ id = "other", label = "Other", color = "#6A6359", icon = "dots" },
@@ -105,6 +105,10 @@ ui.theme.tokens {
 		grid = "alpha({text.primary}, 0.035)",
 		highlight = "alpha(#FFFFFF, 0.05)",
 		panel = "{surface.base}",
+		-- Behind the tab strip, toolbar and sidebar: clear in dark (the
+		-- window's backdrop shows), a paper tint in light (the backdrop
+		-- follows Windows' own mode, which may be dark).
+		chrome = "#00000000",
 	},
 }
 
@@ -146,8 +150,8 @@ ui.theme.register {
 		danger = "#FF5D4D",
 		success = "#7FD48A",
 		warning = "#FFB020",
-		hover = "#FFE4BE0D",
-		pressed = "#FFE4BE17",
+		hover = "#FFE4BE14",
+		pressed = "#FFE4BE1F",
 		selection = { value = "alpha({accent}, 0.30)", item = "alpha({accent}, 0.13)" },
 		["focus.ring"] = "alpha({accent}, 0.65)",
 		scrollbar = { thumb = "#FFE4BE26", ["thumb.active"] = "#FFE4BE40" },
@@ -173,8 +177,8 @@ ui.theme.register {
 		danger = "#D93A2B",
 		success = "#2F9E4F",
 		warning = "#D98A00",
-		hover = "#3A2A120A",
-		pressed = "#3A2A1214",
+		hover = "#3A2A1210",
+		pressed = "#3A2A121A",
 		selection = { value = "alpha({accent}, 0.25)", item = "alpha({accent}, 0.14)" },
 		["focus.ring"] = "alpha({accent}, 0.6)",
 		shadow = {
@@ -182,7 +186,7 @@ ui.theme.register {
 			md = "0 6 18 0 #3A2A1222",
 			lg = "0 18 48 0 #3A2A122E",
 		},
-		app = { glow = "alpha({accent}, 0.18)", panel = "#FBF8F2F2" },
+		app = { glow = "alpha({accent}, 0.18)", panel = "#FBF8F2F2", chrome = "#F1ECE2F0" },
 	}),
 }
 

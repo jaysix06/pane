@@ -88,7 +88,9 @@ impl Aggregator {
                 self.cleanup_add(CleanupKind::OldDownloads, parent, bytes);
             }
         }
-        if bytes >= LARGE_FILE {
+        // Large files people can act on: not the page or hibernation file,
+        // nor Windows' own.
+        if bytes >= LARGE_FILE && class.category != Category::System {
             self.large.push(Reverse((bytes, display.to_string())));
             if self.large.len() > LARGE_FILES_KEPT {
                 self.large.pop();
@@ -264,6 +266,16 @@ mod tests {
         let temp = r.cleanup.iter().find(|c| c.kind == CleanupKind::Temp).unwrap();
         assert_eq!(temp.bytes, 10);
         assert_eq!(temp.items[0].path, r"C:\Users\me\AppData\Local\Temp");
+    }
+
+    #[test]
+    fn system_files_are_not_large_files_to_clear() {
+        let mut a = Aggregator::new(None);
+        add(&mut a, r"pagefile.sys", 8 << 30);
+        add(&mut a, r"Users\me\Videos\movie.mkv", 2 << 30);
+        let r = a.finish("C:", 20 << 30, 0, Mode::Standard, 1);
+        let paths: Vec<&str> = r.large_files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, [r"C:\Users\me\Videos\movie.mkv"]);
     }
 
     #[test]

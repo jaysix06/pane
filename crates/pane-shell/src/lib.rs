@@ -2,7 +2,11 @@
 //! known folders and drives: things only Explorer's own APIs can do.
 
 #[cfg(windows)]
+pub mod clipboard;
+#[cfg(windows)]
 mod context_menu;
+#[cfg(windows)]
+pub mod fileops;
 #[cfg(windows)]
 mod icons;
 #[cfg(windows)]
@@ -11,7 +15,7 @@ mod places;
 mod win;
 
 #[cfg(windows)]
-pub use context_menu::{MenuOutcome, show_context_menu};
+pub use context_menu::{MenuOutcome, show_background_menu, show_context_menu};
 #[cfg(windows)]
 pub use icons::{Icon, icon_rgba};
 #[cfg(windows)]

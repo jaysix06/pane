@@ -1,0 +1,355 @@
+//! File operations from the UI: copy, cut, paste, delete, rename, new
+//! folder and drops, run one per thread through Windows' engine
+//! (`pane_shell::fileops`), with their progress published as `shared("ops")`
+//! for Pane's operations panel.
+
+use std::cell::RefCell;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::time::Duration;
+
+use futures_channel::mpsc::unbounded;
+use futures_util::StreamExt;
+use pane_shell::fileops::{Op, OpOutcome, OpProgress};
+use zgx_desktop::TaskSpawner;
+use zgx_script::{ScriptHost, Shared, Value};
+
+use crate::app::{self, AppRef};
+use crate::nav::Location;
+
+pub type OpsRef = Rc<RefCell<Ops>>;
+
+struct Running {
+    id: u64,
+    label: String,
+    kind: &'static str,
+    progress: OpProgress,
+    finished: bool,
+    failed: Option<String>,
+}
+
+pub struct Ops {
+    out: Shared,
+    /// Names cut in the active tab's folder (shown dimmed), and that folder.
+    cut: Shared,
+    /// Asks the UI to start renaming a row: `{ id, at }`.
+    rename: Shared,
+    tasks: TaskSpawner,
+    running: Vec<Running>,
+    next: u64,
+    cut_set: Option<(PathBuf, Vec<String>)>,
+}
+
+impl Ops {
+    pub fn start(host: &ScriptHost, tasks: &TaskSpawner) -> OpsRef {
+        Rc::new(RefCell::new(Ops {
+            out: host.shared("ops", Value::List(Rc::from(Vec::new()))),
+            cut: host.shared("cut", Value::record::<&str>([])),
+            rename: host.shared("rename", Value::Nil),
+            tasks: tasks.clone(),
+            running: Vec::new(),
+            next: 1,
+            cut_set: None,
+        }))
+    }
+}
+
+fn hwnd() -> isize {
+    pane_shell::active_window().0 as isize
+}
+
+fn count(n: usize, one: &str) -> String {
+    if n == 1 { format!("1 {one}") } else { format!("{n} {one}s") }
+}
+
+/// Runs `op` on a thread, showing it in the panel; `then` runs on the UI
+/// thread when it ends.
+pub fn run(ops: &OpsRef, app: &AppRef, op: Op, label: String, kind: &'static str, then: Option<Box<dyn FnOnce(&OpOutcome)>>) {
+    let id = {
+        let mut o = ops.borrow_mut();
+        let id = o.next;
+        o.next += 1;
+        o.running.push(Running { id, label, kind, progress: OpProgress::default(), finished: false, failed: None });
+        id
+    };
+    publish(ops);
+
+    enum Msg {
+        Progress(OpProgress),
+        Done(Result<OpOutcome, String>),
+    }
+    let (tx, mut rx) = unbounded::<Msg>();
+    let owner = hwnd();
+    std::thread::Builder::new()
+        .name("pane-fileop".into())
+        .spawn(move || {
+            let ptx = tx.clone();
+            let r = pane_shell::fileops::run(owner, &op, move |p| {
+                let _ = ptx.unbounded_send(Msg::Progress(p));
+            });
+            let _ = tx.unbounded_send(Msg::Done(r.map_err(|e| e.message())));
+        })
+        .expect("file operation thread");
+
+    let (ops2, app2) = (ops.clone(), app.clone());
+    let tasks = ops.borrow().tasks.clone();
+    tasks.spawn(async move {
+        let mut then = then;
+        while let Some(msg) = rx.next().await {
+            match msg {
+                Msg::Progress(p) => {
+                    if let Some(r) = ops2.borrow_mut().running.iter_mut().find(|r| r.id == id) {
+                        r.progress = p;
+                    }
+                    publish(&ops2);
+                }
+                Msg::Done(result) => {
+                    {
+                        let mut o = ops2.borrow_mut();
+                        if let Some(r) = o.running.iter_mut().find(|r| r.id == id) {
+                            r.finished = true;
+                            r.progress = OpProgress { done: 1, total: 1 };
+                            match &result {
+                                Err(e) => r.failed = Some(e.clone()),
+                                Ok(out) if !out.failed.is_empty() => {
+                                    let (path, why) = &out.failed[0];
+                                    let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
+                                    r.failed = Some(if out.failed.len() == 1 {
+                                        format!("{name}: {why}")
+                                    } else {
+                                        format!("{} items failed, {name}: {why}", out.failed.len())
+                                    });
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    publish(&ops2);
+                    if let Err(e) = &result {
+                        app2.borrow().toast(e);
+                    }
+                    if let (Ok(out), Some(f)) = (&result, then.take()) {
+                        f(out);
+                    }
+                    app::refresh(&app2);
+                    break;
+                }
+            }
+        }
+        // Keep a finished operation on screen a moment, then let it go.
+        zgx::timer::sleep(Duration::from_millis(if ops2.borrow().running.iter().any(|r| r.id == id && r.failed.is_some()) { 6000 } else { 1800 })).await;
+        ops2.borrow_mut().running.retain(|r| r.id != id);
+        publish(&ops2);
+    });
+}
+
+fn publish(ops: &OpsRef) {
+    let o = ops.borrow();
+    let list: Vec<Value> = o
+        .running
+        .iter()
+        .map(|r| {
+            let fraction = if r.progress.total > 0 { r.progress.done as f64 / r.progress.total as f64 } else { 0.0 };
+            Value::record([
+                ("id", Value::from(r.id as f64)),
+                ("label", Value::from(r.label.as_str())),
+                ("kind", Value::from(r.kind)),
+                ("progress", Value::from(fraction.clamp(0.0, 1.0))),
+                ("finished", Value::from(r.finished)),
+                ("error", r.failed.as_deref().map_or(Value::Nil, Value::from)),
+            ])
+        })
+        .collect();
+    o.out.set(Value::List(Rc::from(list)));
+}
+
+/// Cut items as `{ folder, ids }`: the UI dims them while it shows that folder.
+fn publish_cut(ops: &OpsRef, _app: &AppRef) {
+    let o = ops.borrow();
+    let value = match &o.cut_set {
+        Some((dir, names)) => Value::record([
+            ("folder", Value::from(dir.display().to_string().as_str())),
+            ("ids", Value::record(names.iter().map(|n| (n.as_str(), Value::from(true))).collect::<Vec<_>>())),
+        ]),
+        None => Value::record::<&str>([]),
+    };
+    o.cut.set(value);
+}
+
+fn current_folder(app: &AppRef) -> Option<PathBuf> {
+    match &app.borrow().tab().history.current {
+        Location::Folder(p) => Some(p.clone()),
+        _ => None,
+    }
+}
+
+// ---------------------------------------------------------------- actions
+
+pub fn copy(ops: &OpsRef, app: &AppRef, cut: bool) {
+    let paths = app.borrow().tab().selected_paths();
+    if paths.is_empty() {
+        return;
+    }
+    if !pane_shell::clipboard::set_files(hwnd(), &paths, cut) {
+        app.borrow().toast("Couldn't use the clipboard; another app may be holding it.");
+        return;
+    }
+    ops.borrow_mut().cut_set = if cut {
+        current_folder(app).map(|dir| {
+            (dir, paths.iter().filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned())).collect())
+        })
+    } else {
+        None
+    };
+    publish_cut(ops, app);
+}
+
+pub fn paste(ops: &OpsRef, app: &AppRef) {
+    let Some(dest) = current_folder(app) else { return };
+    let Some((files, cut)) = pane_shell::clipboard::get_files(hwnd()) else {
+        return;
+    };
+    let names = count(files.len(), "item");
+    let op = if cut { Op::Move { from: files, to: dest.clone() } } else { Op::Copy { from: files, to: dest.clone() } };
+    let label = format!("{} {names} to {}", if cut { "Moving" } else { "Copying" }, folder_name(&dest));
+    let ops2 = ops.clone();
+    let app2 = app.clone();
+    run(
+        ops,
+        app,
+        op,
+        label,
+        if cut { "move" } else { "copy" },
+        Some(Box::new(move |_| {
+            if cut {
+                pane_shell::clipboard::clear(hwnd());
+                ops2.borrow_mut().cut_set = None;
+                publish_cut(&ops2, &app2);
+            }
+        })),
+    );
+}
+
+/// Deletes the selection: to the Recycle Bin, or for good with `permanent`
+/// (the UI has asked; `confirmed` says so).
+pub fn delete(ops: &OpsRef, app: &AppRef, permanent: bool, confirmed: bool) {
+    let paths = app.borrow().tab().selected_paths();
+    if paths.is_empty() || (permanent && !confirmed) {
+        return;
+    }
+    let label = format!(
+        "{} {}",
+        if permanent { "Deleting" } else { "Moving to Recycle Bin:" },
+        if paths.len() == 1 { folder_name(&paths[0]) } else { count(paths.len(), "item") }
+    );
+    app::select_none(app);
+    run(ops, app, Op::Delete { paths, permanent }, label, "delete", None);
+}
+
+pub fn rename(ops: &OpsRef, app: &AppRef, index: usize, name: &str) {
+    let Some(path) = app.borrow().tab().path_of(index) else { return };
+    let current = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    if name == current {
+        return;
+    }
+    if let Err(why) = pane_shell::fileops::check_name(name) {
+        app.borrow().toast(&why);
+        return;
+    }
+    let label = format!("Renaming {current}");
+    let new_name = name.to_string();
+    let app2 = app.clone();
+    run(
+        ops,
+        app,
+        Op::Rename { path, name: new_name.clone() },
+        label,
+        "rename",
+        Some(Box::new(move |out| {
+            if out.failed.is_empty() && !out.aborted {
+                app::select_name_after_load(&app2, &new_name);
+            }
+        })),
+    );
+}
+
+pub fn new_folder(ops: &OpsRef, app: &AppRef) {
+    let Some(dir) = current_folder(app) else { return };
+    let name = pane_shell::fileops::unique_name(&dir, "New folder");
+    let ops2 = ops.clone();
+    let app2 = app.clone();
+    let created = name.clone();
+    run(
+        ops,
+        app,
+        Op::NewFolder { parent: dir, name },
+        "Creating a folder".into(),
+        "new",
+        Some(Box::new(move |out| {
+            if out.failed.is_empty() {
+                // Select it and start renaming, as Explorer does.
+                app::select_name_after_load(&app2, &created);
+                request_rename(&ops2, &created);
+            }
+        })),
+    );
+}
+
+/// Asks the UI to put row `name` into rename mode.
+pub fn request_rename(ops: &OpsRef, name: &str) {
+    ops.borrow().rename.set(Value::record([
+        ("id", Value::from(name)),
+        ("at", Value::from(pane_scan::model::now_secs() as f64 * 1000.0 + rand_ms())),
+    ]));
+}
+
+fn rand_ms() -> f64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0.0, |d| d.subsec_millis() as f64)
+}
+
+/// Files dropped (from Pane or another app) on folder `target`: moved
+/// within a drive, copied across drives, as Explorer does; `copy` (Ctrl)
+/// always copies.
+pub fn drop_files(ops: &OpsRef, app: &AppRef, paths: Vec<PathBuf>, target: PathBuf, copy: bool) {
+    let paths: Vec<PathBuf> = paths
+        .into_iter()
+        // Not onto itself, into its own subfolder, or where it already is.
+        .filter(|p| !target.starts_with(p) && p.parent() != Some(target.as_path()))
+        .collect();
+    if paths.is_empty() || !target.is_dir() {
+        return;
+    }
+    let same_drive = paths.iter().all(|p| drive(p) == drive(&target));
+    let moving = same_drive && !copy;
+    let label = format!(
+        "{} {} to {}",
+        if moving { "Moving" } else { "Copying" },
+        count(paths.len(), "item"),
+        folder_name(&target)
+    );
+    let op = if moving { Op::Move { from: paths, to: target } } else { Op::Copy { from: paths, to: target } };
+    run(ops, app, op, label, if moving { "move" } else { "copy" }, None);
+}
+
+/// Deletes the contents of the given folders for good (the Overview's
+/// temp cleanup, after the UI confirmed): what is in use is skipped.
+pub fn purge_contents(ops: &OpsRef, app: &AppRef, folders: Vec<PathBuf>, then: Box<dyn FnOnce(&OpOutcome)>) {
+    let mut children = Vec::new();
+    for f in &folders {
+        if let Ok(rd) = std::fs::read_dir(f) {
+            children.extend(rd.flatten().map(|e| e.path()));
+        }
+    }
+    if children.is_empty() {
+        return;
+    }
+    run(ops, app, Op::Purge { paths: children }, "Clearing temporary files".into(), "delete", Some(then));
+}
+
+fn drive(p: &Path) -> String {
+    p.components().next().map(|c| c.as_os_str().to_string_lossy().to_ascii_uppercase()).unwrap_or_default()
+}
+
+fn folder_name(p: &Path) -> String {
+    p.file_name().map_or_else(|| p.display().to_string(), |n| n.to_string_lossy().into_owned())
+}

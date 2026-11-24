@@ -47,7 +47,18 @@ M.toast = ui.shared("toast", nil :: { message: string, at: number }?)
 -- The Storage Overview (crates/pane-app/src/storage.rs).
 M.storage = ui.shared("storage", nil :: any)
 
+-- File operations in progress (crates/pane-app/src/ops.rs).
+M.ops = ui.shared("ops", {} :: { any })
+-- Cut items: { folder, ids }, dimmed while that folder shows.
+M.cut = ui.shared("cut", {} :: any)
+-- Rust asks a row to start renaming: { id, at }.
+M.rename_request = ui.shared("rename", nil :: { id: string, at: number }?)
+
 -- UI-only state.
+-- The row being renamed in place (its id), or nil.
+M.renaming = ui.state("renaming", nil :: string?)
+-- When a rename last ended (ui.now()), so its Enter isn't taken as "open".
+M.rename_ended_at = 0
 M.editing_address = ui.state("editing_address", false)
 M.address_text = ui.state("address_text", "")
 M.grid_cols = ui.state("grid_cols", 6)
@@ -66,6 +77,22 @@ end
 function M.is_selected(id: string): boolean
 	local ids = M.sel:get().ids
 	return ids ~= nil and ids[id] == true
+end
+
+function M.is_cut(id: string): boolean
+	local c = M.cut:get()
+	local n = M.nav:get()
+	return c ~= nil and c.ids ~= nil and c.ids[id] == true and n ~= nil and c.folder == n.path
+end
+
+-- The full path of an item in the current folder.
+function M.path_of(id: string): string
+	local n = M.nav:peek()
+	local dir = if n then n.path else ""
+	if string.sub(dir, -1) == "\\" then
+		return dir .. id
+	end
+	return dir .. "\\" .. id
 end
 
 -- Host images for file icons: "host:s/<key>" (32 px) or "host:l/<key>" (96 px).

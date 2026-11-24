@@ -43,6 +43,12 @@ local paths: { [string]: string } = {
 	check = "M5 12.5l4.5 4.5L19 7.5",
 	chevron = "M9 6l6 6-6 6",
 	external = "M14 4h6v6M20 4l-8 8M18 14v5H5V6h5",
+	cut = "M8.5 8.5a2.5 2.5 0 1 1-3.5-3.5 2.5 2.5 0 0 1 3.5 3.5zM8.5 15.5a2.5 2.5 0 1 0-3.5 3.5 2.5 2.5 0 0 0 3.5-3.5zM8.5 8.5L19 19M8.5 15.5L19 5",
+	copy = "M9 9h10.5v10.5H9zM15 9V4.5H4.5V15H9",
+	paste = "M9 4.5h6v3H9zM9 6H6v14h12V6h-3M9.5 12.5h5M9.5 16h5",
+	rename = "M4 17.5V20h2.5L17.8 8.7l-2.5-2.5zM14 7.5l2.5 2.5M13 20h7",
+	folder_plus = "M3.5 7.5V18a1 1 0 0 0 1 1h15a1 1 0 0 0 1-1V9.5a1 1 0 0 0-1-1h-7l-2-2.5h-6a1 1 0 0 0-1 1zM12 11.5v5M9.5 14h5",
+	warning = "M12 4l9 15.5H3zM12 10v4.5M12 17h.01",
 }
 
 M.names = paths

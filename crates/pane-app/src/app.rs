@@ -37,6 +37,8 @@ pub struct Tab {
     pub generation: u64,
     pub error: Option<String>,
     pub loading: bool,
+    /// A name to select once the next listing has it (a new or renamed item).
+    pub pending_select: Option<String>,
 }
 
 impl Tab {
@@ -54,6 +56,7 @@ impl Tab {
             generation: 0,
             error: None,
             loading: false,
+            pending_select: None,
         }
     }
 
@@ -281,6 +284,12 @@ pub fn load(app: &AppRef, index: usize, keep_selection: bool) {
                     };
                     tab.rows = Value::List(Rc::from(rows));
                     tab.error = None;
+                    if let Some(name) = tab.pending_select.take() {
+                        match listing.entries.iter().position(|e| e.name.eq_ignore_ascii_case(&name)) {
+                            Some(i) => tab.selection.click(i, false, false),
+                            None => tab.pending_select = Some(name), // not listed yet: next time
+                        }
+                    }
                     let count = listing.entries.len();
                     tab.entries = listing.entries;
                     tab.roots = listing.roots;
@@ -454,9 +463,21 @@ pub fn forward(app: &AppRef) {
 }
 
 pub fn up(app: &AppRef) {
-    let parent = app.borrow().tab().history.current.parent();
+    let (parent, came_from) = {
+        let a = app.borrow();
+        let current = &a.tab().history.current;
+        let name = match current {
+            Location::Folder(p) => p.file_name().map(|n| n.to_string_lossy().into_owned()),
+            _ => None,
+        };
+        (current.parent(), name)
+    };
     if let Some(parent) = parent {
         navigate(app, parent);
+        // Select the folder we came out of, as Explorer does.
+        if let Some(name) = came_from {
+            select_name_after_load(app, &name);
+        }
     }
 }
 
@@ -617,6 +638,12 @@ pub fn click(app: &AppRef, i: usize, ctrl: bool, shift: bool) {
         a.tab_mut().selection.click(i, ctrl, shift);
     }
     publish_selection(app);
+}
+
+/// Selects `name` in the active tab once it is listed (after a rename or a
+/// new folder, whose listing arrives a moment later).
+pub fn select_name_after_load(app: &AppRef, name: &str) {
+    app.borrow_mut().tab_mut().pending_select = Some(name.to_string());
 }
 
 pub fn ensure_selected(app: &AppRef, i: usize) {

@@ -234,6 +234,14 @@ fn toast(storage: &StorageRef, message: &str) {
     publish(storage);
 }
 
+/// The folders a cleanup card covers (for temp: the temp folders found).
+pub fn cleanup_folders(storage: &StorageRef, id: &str) -> Vec<PathBuf> {
+    let s = storage.borrow();
+    let Some(r) = s.results.get(&s.selected) else { return Vec::new() };
+    let Some(c) = r.cleanup.iter().find(|c| c.kind.id() == id) else { return Vec::new() };
+    c.items.iter().map(|i| PathBuf::from(&i.path)).filter(|p| p.is_dir()).collect()
+}
+
 /// The biggest item of a cleanup card (what "Review" opens).
 pub fn cleanup_target(storage: &StorageRef, id: &str) -> Option<String> {
     let s = storage.borrow();

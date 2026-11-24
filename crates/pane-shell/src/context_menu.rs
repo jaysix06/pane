@@ -39,8 +39,11 @@ thread_local! {
 pub enum MenuOutcome {
     /// Closed without choosing.
     Dismissed,
-    /// A command ran; its verb when the handler names one ("delete", "rename").
+    /// A command ran; its verb when the handler names one ("delete", "paste").
     Invoked(Option<String>),
+    /// "Rename" was chosen: Pane renames in place (the shell can't without
+    /// Explorer's own view).
+    Rename,
 }
 
 struct Pidl(*mut ITEMIDLIST);
@@ -67,12 +70,35 @@ pub fn show_context_menu(hwnd: HWND, paths: &[PathBuf]) -> windows::core::Result
         pidls.iter().map(|p| unsafe { ILFindLastID(p.0) }.cast_const()).collect();
     // SAFETY: children point into pidls, alive until the end of this call.
     let menu: IContextMenu = unsafe { folder.GetUIObjectOf(hwnd, &children, None)? };
+    track(hwnd, &menu, paths[0].parent(), CMF_CANRENAME)
+}
 
+/// Shows the folder's own menu (right-click on empty space: New, Paste,
+/// Properties, apps' entries) and runs what is chosen.
+pub fn show_background_menu(hwnd: HWND, folder: &Path) -> windows::core::Result<MenuOutcome> {
+    use windows::Win32::UI::Shell::{BHID_SFObject, IShellItem, SHCreateItemFromParsingName};
+    init_com();
+    // SAFETY: COM calls on this thread's apartment.
+    let menu: IContextMenu = unsafe {
+        let item: IShellItem = SHCreateItemFromParsingName(PCWSTR(wide(folder).as_ptr()), None)?;
+        let sf: IShellFolder = item.BindToHandler(None, &BHID_SFObject)?;
+        sf.CreateViewObject(hwnd)?
+    };
+    track(hwnd, &menu, Some(folder), CMF_NORMAL)
+}
+
+/// Fills, shows and runs `menu` at the pointer.
+fn track(
+    hwnd: HWND,
+    menu: &IContextMenu,
+    dir: Option<&Path>,
+    extra: u32,
+) -> windows::core::Result<MenuOutcome> {
     // SAFETY: plain Win32 menu calls on a menu this function owns.
     unsafe {
         let hmenu = CreatePopupMenu()?;
         let shift = GetKeyState(i32::from(VK_SHIFT.0)) < 0;
-        let mut flags = CMF_NORMAL | CMF_EXPLORE | CMF_CANRENAME;
+        let mut flags = CMF_NORMAL | CMF_EXPLORE | extra;
         if shift {
             flags |= CMF_EXTENDEDVERBS;
         }
@@ -96,7 +122,11 @@ pub fn show_context_menu(hwnd: HWND, paths: &[PathBuf]) -> windows::core::Result
         let id = cmd.0 as u32;
         let outcome = if id >= FIRST_ID {
             let offset = id - FIRST_ID;
-            let verb = verb_of(&menu, offset);
+            let verb = verb_of(menu, offset);
+            if verb.as_deref().is_some_and(|v| v.eq_ignore_ascii_case("rename")) {
+                let _ = DestroyMenu(hmenu);
+                return Ok(MenuOutcome::Rename);
+            }
             let mut info = CMINVOKECOMMANDINFOEX {
                 cbSize: size_of::<CMINVOKECOMMANDINFOEX>() as u32,
                 fMask: CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE | if shift { CMIC_MASK_SHIFT_DOWN } else { 0 },
@@ -108,7 +138,7 @@ pub fn show_context_menu(hwnd: HWND, paths: &[PathBuf]) -> windows::core::Result
                 ptInvoke: pt,
                 ..Default::default()
             };
-            let parent = paths[0].parent().map(wide);
+            let parent = dir.map(wide);
             if let Some(dir) = &parent {
                 info.lpDirectoryW = PCWSTR(dir.as_ptr());
             }

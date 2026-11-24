@@ -160,8 +160,22 @@ local function glow_section(): Node
 			gap = 12,
 			items = "center",
 			w_full = true,
-			ui.slider {
+			-- A track that brightens toward the accent, the slider over it.
+			ui.div {
+				grow = 1,
+				h = 14,
+				rounded = "$radius.full",
+				gradient = function()
+					local a = theme.accent_for(state.setting("accent"), ui.theme.kind() == "light")
+					return { angle = 90, stops = { theme.alpha(a, 0.08), a } }
+				end,
+				ui.slider {
 				label = "Glow intensity",
+				w_full = true,
+				h = 14,
+				px = 0,
+				py = 0,
+				bg = "#00000000",
 				value = function()
 					return state.setting("glow") or 70
 				end,
@@ -175,6 +189,7 @@ local function glow_section(): Node
 				value_text = function()
 					return `{state.setting("glow") or 70}%`
 				end,
+				},
 			},
 			ui.text {
 				function()
@@ -251,10 +266,19 @@ function M.sheet(): Node
 		label = "Customize look",
 		placement = { x = "end", y = "start", inset = 12 },
 		w = 420,
+		p = 0,
+		bg = "#00000000",
 		build = function()
 			return ui.column {
 				w = 420,
-				max_h = "100%",
+				-- As tall as the window allows (less the inset); the controls
+				-- scroll inside. A modal's panel doesn't take a percentage
+				-- height, so this reads the window's size.
+				-- (read once as it opens: no script runs while resizing).
+				h = (function()
+					local size = ui.window.size:peek()
+					return if size and size.height then math.max(320, size.height - 24) else 600
+				end)(),
 				p = 22,
 				gap = 20,
 				bg = "$surface.overlay",

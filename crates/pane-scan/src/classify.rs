@@ -135,8 +135,13 @@ pub fn classify(parts: &[&str]) -> Class {
         return class(Category::Apps, 2.min(n - 1).max(1));
     }
     if first == "programdata" {
-        if matches!(parts.get(1), Some(&"package cache") | Some(&"microsoft")) && parts.get(2) != Some(&"windows defender") {
+        // Installers' package caches are caches; Microsoft's folder is
+        // Windows' own (Defender, search, updates), not something to clear.
+        if parts.get(1) == Some(&"package cache") {
             return class(Category::Caches, 2.min(n - 1).max(1));
+        }
+        if parts.get(1) == Some(&"microsoft") {
+            return class(Category::System, 2.min(n - 1).max(1));
         }
         return class(Category::Apps, 2.min(n - 1).max(1));
     }
@@ -237,6 +242,14 @@ mod tests {
         assert_eq!(of(r"Program Files\Blender Foundation\Blender\blender.exe"), (Category::Apps, r"program files\blender foundation".into()));
         assert_eq!(of(r"Users\me\AppData\Local\Programs\Microsoft VS Code\Code.exe").1, r"users\me\appdata\local\programs\microsoft vs code");
         assert_eq!(of(r"Users\me\AppData\Roaming\discord\settings.json").0, Category::Apps);
+    }
+
+    #[test]
+    fn programdata() {
+        assert_eq!(of(r"ProgramData\Microsoft\Windows Defender\Definition Updates\a.vdm").0, Category::System);
+        assert_eq!(of(r"ProgramData\Package Cache\{guid}\setup.msi").0, Category::Caches);
+        assert_eq!(of(r"ProgramData\Riot Games\a.dat").0, Category::Games);
+        assert_eq!(of(r"ProgramData\Docker\a.bin").0, Category::Apps);
     }
 
     #[test]

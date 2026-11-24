@@ -6,6 +6,7 @@ local state = require("../state")
 local common = require("./common")
 local icons = require("./icons")
 local customize = require("./customize")
+local commands = require("./commands")
 
 local function nav_flag(name: string): () -> boolean
 	return function()
@@ -23,22 +24,71 @@ local function start_editing()
 	state.editing_address:set(true)
 end
 
+-- Long paths show their last parts; the rest fold into a "…" menu.
+local SHOWN_CRUMBS = 3
+
+local function hidden_crumbs_menu(hidden: any): Node
+	local open = ui.state("crumbs_menu_open", false)
+	return ui.show(
+		function()
+			return #hidden:get() > 0
+		end,
+		ui.menu {
+			open = open,
+			label = "Earlier folders",
+			anchor = ui.button {
+				label = "Earlier folders",
+				on_click = ui.toggle(open),
+				px = 6,
+				py = 3,
+				rounded = "$radius.sm",
+				bg = "#00000000",
+				color = "$text.secondary",
+				hover = { bg = "$hover", color = "$text.primary" },
+				ui.text { "…", font = "$font.mono" },
+			},
+			ui.each(hidden, function(crumb: state.Crumb)
+				return ui.menu_item {
+					label = crumb.label,
+					on_click = function()
+						ui.invoke("navigate", crumb.path)
+					end,
+				}
+			end),
+		}
+	)
+end
+
 local function crumbs_view(): Node
-	local crumbs = ui.computed(function(): { state.Crumb }
+	local all = ui.computed(function(): { state.Crumb }
 		local n = state.nav:get()
 		return if n then n.crumbs else {}
+	end)
+	local crumbs = ui.computed(function(): { state.Crumb }
+		local c = all:get()
+		if #c <= SHOWN_CRUMBS + 1 then
+			return c
+		end
+		return { table.unpack(c, #c - SHOWN_CRUMBS + 1) }
+	end)
+	local hidden = ui.computed(function(): { state.Crumb }
+		local c = all:get()
+		if #c <= SHOWN_CRUMBS + 1 then
+			return {}
+		end
+		return { table.unpack(c, 1, #c - SHOWN_CRUMBS) }
 	end)
 	return ui.row {
 		grow = 1,
 		min_w = 0,
 		h_full = true,
 		items = "center",
-		-- The end of the path matters most: overflow is cut at the start.
-		justify = "end",
 		overflow = "hidden",
 		ui.row {
-			shrink = 0,
+			shrink = 1,
+			min_w = 0,
 			items = "center",
+			hidden_crumbs_menu(hidden),
 			ui.each(crumbs, function(crumb: state.Crumb, index: number)
 				local last = function()
 					return index == #crumbs:get()
@@ -46,10 +96,33 @@ local function crumbs_view(): Node
 				return ui.row {
 					items = "center",
 					shrink = 0,
-					ui.show(index > 1, ui.div { px = 1, color = "$text.tertiary", icons.icon("chevron", 12) }),
+					ui.show(function()
+						return index > 1 or #hidden:get() > 0
+					end, ui.div { px = 1, color = "$text.tertiary", icons.icon("chevron", 12) }),
 					ui.button {
 						label = crumb.label,
 						on_click = ui.action("navigate", crumb.path),
+				-- A place takes dropped files (moved within a drive, copied across)
+				-- and opens when a drag rests on it.
+				drop_when = function(payload: any)
+					return type(payload) == "table" and payload.paths ~= nil and string.sub(crumb.path, 1, 2) ~= "::"
+				end,
+				on_drop = function(payload: any)
+					ui.invoke("drop", { paths = payload.paths, target = crumb.path, copy = ui.modifiers.control:peek() })
+				end,
+				on_file_drop = function(files)
+					local paths = {}
+					for _, f in files do
+						table.insert(paths, f.path)
+					end
+					if string.sub(crumb.path, 1, 2) ~= "::" then
+						ui.invoke("drop", { paths = paths, target = crumb.path, copy = ui.modifiers.control:peek() })
+					end
+				end,
+				on_drag_spring = function()
+					ui.invoke("navigate", crumb.path)
+					return true
+				end,
 						on_aux_click = function(e)
 							if e.button == "middle" then
 								ui.invoke("navigate_new_tab", crumb.path)
@@ -177,6 +250,32 @@ local function view_switch(): Node
 	}
 end
 
+-- New folder, cut, copy, paste, rename, delete: shown in folders.
+local function file_commands(): Node
+	local function has_selection(): boolean
+		return state.sel:get().count > 0
+	end
+	return ui.row {
+		gap = 2,
+		items = "center",
+		common.icon_button { label = "New folder (Ctrl+Shift+N)", icon = "folder_plus", on_click = commands.new_folder },
+		ui.div { w = 1, h = 18, bg = "$border.subtle", mx = 4 },
+		common.icon_button { label = "Cut (Ctrl+X)", icon = "cut", on_click = commands.cut, enabled = has_selection },
+		common.icon_button { label = "Copy (Ctrl+C)", icon = "copy", on_click = commands.copy, enabled = has_selection },
+		common.icon_button { label = "Paste (Ctrl+V)", icon = "paste", on_click = commands.paste },
+		common.icon_button { label = "Rename (F2)", icon = "rename", on_click = commands.rename, enabled = has_selection },
+		common.icon_button {
+			label = "Delete (Del)",
+			icon = "trash",
+			on_click = function()
+				commands.delete(ui.modifiers.shift:peek())
+			end,
+			enabled = has_selection,
+		},
+		ui.div { w = 1, h = 18, bg = "$border.subtle", mx = 4 },
+	}
+end
+
 local function sort_menu(): Node
 	local open = ui.state("sort_menu_open", false)
 	local function sort_is(key: string): () -> boolean
@@ -234,40 +333,28 @@ local function more_menu(): Node
 		open = open,
 		label = "More",
 		anchor = common.icon_button { label = "More", icon = "more", on_click = ui.toggle(open) },
-		ui.menu_item {
-			"Customize look…",
-			on_click = function()
-				customize.open:set(true)
-			end,
-		},
+		common.menu_item("Customize look…", function()
+			customize.open:set(true)
+		end, "palette"),
 		common.separator(),
 		common.check_item("Hidden items", setting_on("show_hidden"), toggle_setting("show_hidden")),
 		common.check_item("File name extensions", setting_on("show_extensions"), toggle_setting("show_extensions")),
 		common.check_item("Folders first", setting_on("folders_first"), toggle_setting("folders_first")),
 		common.separator(),
-		ui.menu_item {
-			"Pin to Quick access",
-			on_click = function()
-				ui.invoke("pin_current")
-			end,
-		},
-		ui.menu_item {
-			"Select all",
-			on_click = function()
-				ui.invoke("select_all")
-			end,
-		},
+		common.menu_item("Pin to Quick access", function()
+			ui.invoke("pin_current")
+		end, "pin"),
+		common.menu_item("Select all", function()
+			ui.invoke("select_all")
+		end, "check"),
 		ui.show(
 			function()
 				local s = state.storage:get()
 				return s ~= nil and s.instant == true
 			end,
-			ui.menu_item {
-				"Turn off instant scan…",
-				on_click = function()
-					ui.invoke("remove_instant_scan")
-				end,
-			}
+			common.menu_item("Turn off instant scan…", function()
+				ui.invoke("remove_instant_scan")
+			end, "bolt")
 		),
 	}
 end
@@ -302,6 +389,10 @@ return function(): Node
 			ui.div { w = 4 },
 			path_pill(),
 			ui.div { w = 4 },
+			ui.show(function()
+				local n = state.nav:get()
+				return n ~= nil and not n.overview and not n.this_pc
+			end, file_commands()),
 			ui.show(function()
 				local n = state.nav:get()
 				return not (n and n.overview)

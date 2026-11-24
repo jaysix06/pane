@@ -10,6 +10,9 @@ local Sidebar = require("./components/sidebar")
 local Views = require("./components/views")
 local Overview = require("./components/overview")
 local customize = require("./components/customize")
+local confirm = require("./components/confirm")
+local commands = require("./components/commands")
+local OpsPanel = require("./components/ops_panel")
 
 -- Pane Amber, dark or light as Settings say (theme.luau).
 theme.follow(state.setting)
@@ -29,6 +32,14 @@ local function on_key(e): boolean
 	if e.editing then
 		return false
 	end
+	-- A rename field has the keyboard; if its row is gone, let go.
+	if state.renaming:peek() ~= nil then
+		local id = state.renaming:peek()
+		if state.rows:index_of("id", id) ~= nil then
+			return false
+		end
+		state.renaming:set(nil)
+	end
 	local key = e.key
 	local ctrl = e.ctrl or e.meta
 	if e.alt and key == "ArrowLeft" then
@@ -47,11 +58,26 @@ local function on_key(e): boolean
 		ui.invoke(if e.shift then "prev_tab" else "next_tab")
 	elseif ctrl and key == "a" then
 		ui.invoke("select_all")
+	elseif ctrl and key == "c" then
+		commands.copy()
+	elseif ctrl and key == "x" then
+		commands.cut()
+	elseif ctrl and key == "v" then
+		commands.paste()
+	elseif ctrl and e.shift and (key == "N" or key == "n") then
+		commands.new_folder()
+	elseif key == "Delete" then
+		commands.delete(e.shift)
+	elseif key == "F2" then
+		commands.rename()
 	elseif (ctrl and key == "l") or (e.alt and key == "d") or key == "F4" then
 		local n = state.nav:peek()
 		state.address_text:set(if n then n.address else "")
 		state.editing_address:set(true)
 	elseif key == "Enter" then
+		if ui.now() - state.rename_ended_at < 400 then
+			return true
+		end
 		if state.sel:peek().count > 0 then
 			ui.invoke("open_selection")
 		end
@@ -96,6 +122,7 @@ return ui.column {
 	h_full = true,
 	-- The accent, glow and corners from Settings, over the whole window.
 	theme = theme.scope(state.setting),
+	bg = "$app.chrome",
 	on_key = on_key,
 	-- The mouse's back and forward buttons.
 	on_aux_click = function(e)
@@ -126,6 +153,7 @@ return ui.column {
 				border_color = "$border.subtle",
 				inset_shadow = { x = 0, y = 1, color = "$app.highlight" },
 				overflow = "hidden",
+				relative = true,
 				ui.show(is_overview, Overview(), ui.column {
 					grow = 1,
 					w_full = true,
@@ -133,8 +161,10 @@ return ui.column {
 					Views(),
 					status_bar(),
 				}),
+				OpsPanel(),
 			},
 		},
 	},
 	customize.sheet(),
+	confirm.dialog(),
 }

@@ -39,9 +39,97 @@ local COL_DATE = 170
 local COL_TYPE = 190
 local COL_SIZE = 110
 
+-- What a drag carries: the paths of the selection when the row is part of
+-- it, else just the row.
+type Drag = { paths: { string } }
+
+local function drag_payload(row: state.Row): Drag
+	if state.is_selected(row.id) then
+		local paths = {}
+		for id in state.sel:peek().ids do
+			table.insert(paths, state.path_of(id))
+		end
+		return { paths = paths }
+	end
+	return { paths = { state.path_of(row.id) } }
+end
+
+local function drop_on(target: string?, paths: { string })
+	ui.invoke("drop", { paths = paths, target = target, copy = ui.modifiers.control:peek() })
+end
+
+local function file_paths(files: { any }): { string }
+	local out = {}
+	for _, f in files do
+		table.insert(out, f.path)
+	end
+	return out
+end
+
+local function base_name(path: string): string
+	return string.match(path, "([^/\\]+)[/\\]*$") or path
+end
+
 -- What a press on an item does, shared by every layout.
 local function item_handlers(index: () -> number, row: () -> state.Row)
 	return {
+		-- Drag out to other apps or onto folders; folders take drops and
+		-- spring open when a drag rests on them.
+		on_drag = function(): Drag?
+			if state.renaming:peek() ~= nil then
+				return nil
+			end
+			return drag_payload(row())
+		end,
+		drag_preview = function(payload: Drag)
+			return ui.row {
+				px = 10,
+				py = 6,
+				gap = 8,
+				items = "center",
+				rounded = "$radius.md",
+				bg = "$surface.overlay",
+				border = 1,
+				border_color = "$focus.ring",
+				shadow = { x = 0, y = 0, blur = 14, spread = 0, color = "$app.glow" },
+				ui.text {
+					if #payload.paths == 1 then base_name(payload.paths[1]) else `{#payload.paths} items`,
+					literal = true,
+					weight = 500,
+				},
+			}
+		end,
+		drag_preview_anchor = { 0, 0.5 },
+		drag_preview_offset = { 14, 0 },
+		drag_export = function(payload: Drag)
+			return { files = payload.paths }
+		end,
+		drop_when = function(payload: any)
+			local r = row()
+			if not r.dir or type(payload) ~= "table" or payload.paths == nil then
+				return false
+			end
+			local target = state.path_of(r.id)
+			for _, p in payload.paths do
+				if p == target then
+					return false
+				end
+			end
+			return true
+		end,
+		on_drop = function(payload: Drag)
+			drop_on(state.path_of(row().id), payload.paths)
+		end,
+		on_drag_spring = function()
+			if row().dir then
+				ui.invoke("open", index())
+				return true
+			end
+			return false
+		end,
+		on_file_drop = function(files)
+			drop_on(if row().dir then state.path_of(row().id) else nil, file_paths(files))
+		end,
 		on_click = function(e)
 			local i = index()
 			ui.invoke("click", { index = i, ctrl = e.ctrl == true, shift = e.shift == true })
@@ -70,6 +158,96 @@ local function with(base: { [any]: any }, extra: { [any]: any }): { [any]: any }
 		base[k] = v
 	end
 	return base
+end
+
+-- The name, or a field while renaming it in place (F2, the menu's Rename,
+-- a new folder). Enter or leaving the field renames; Escape cancels.
+local function name_cell(r: () -> state.Row, index: () -> number, grow: boolean?): Node
+	-- What is typed, followed with on_change, so Enter can commit it and
+	-- stop there (it must not reach the window's Enter = open).
+	local draft: string? = nil
+	local function commit(t: string?)
+		if state.renaming:peek() ~= nil then
+			state.renaming:set(nil)
+			-- The Enter that ended it must not also open the item.
+			state.rename_ended_at = ui.now()
+			if t ~= nil then
+				ui.invoke("rename", { index = index(), name = t })
+			end
+		end
+	end
+	return ui.show(
+		function()
+			return state.renaming:get() == r().id
+		end,
+		ui.input {
+			value = function()
+				return r().id
+			end,
+			label = "New name",
+			h = 24,
+			px = 6,
+			py = 0,
+			grow = 1,
+			min_w = 80,
+			bg = "$surface.sunken",
+			border = 1,
+			border_color = "$accent",
+			rounded = "$radius.sm",
+			caret_color = "$accent",
+			on_mount = function(el)
+				draft = nil
+				el:focus()
+				-- Select the name without its extension, as Explorer does
+				-- (after the field has its text, a moment later).
+				local name = r().id
+				local dot = if r().dir then nil else string.find(name, "%.[^.]*$")
+				ui.after(16, function()
+					if dot and dot > 1 then
+						el:set_selection(0, dot - 1)
+					else
+						el:select_all()
+					end
+				end)
+			end,
+			on_change = function(t: string)
+				draft = t
+			end,
+			on_commit = function(t: string)
+				commit(t)
+			end,
+			on_blur = function()
+				commit(draft)
+			end,
+			on_key = function(e)
+				if e.key == "Escape" then
+					draft = nil
+					commit(nil)
+					return true
+				elseif e.key == "Enter" then
+					commit(draft)
+					return true
+				end
+				return false
+			end,
+		},
+		ui.text {
+			function()
+				return r().name
+			end,
+			literal = true,
+			truncate = true,
+			min_w = 0,
+			grow = if grow then 1 else 0,
+		}
+	)
+end
+
+-- Cut items fade until they are pasted.
+local function cut_opacity(r: () -> state.Row): () -> number
+	return function()
+		return if state.is_cut(r().id) then 0.45 else 1
+	end
 end
 
 local function selected_bg(row: () -> state.Row): () -> string
@@ -169,10 +347,15 @@ local function details_row(_item: state.Row, index: State<number>, row: State<st
 			min_w = 0,
 			gap = 8,
 			items = "center",
+			-- Cut items fade (on the content: the row's own opacity belongs
+			-- to its entrance animation).
+			opacity = cut_opacity(r),
 			common.file_icon(field("icon"), function()
 				return r().dir
 			end, 18),
-			ui.text { field("name"), literal = true, truncate = true, min_w = 0 },
+			name_cell(r, function()
+				return index:peek()
+			end),
 		},
 		ui.text {
 			field("date"),
@@ -231,19 +414,20 @@ local function list_row(_item: state.Row, index: State<number>, row: State<state
 		common.pip(function()
 			return state.is_selected(r().id)
 		end),
-		common.file_icon(function()
-			return r().icon
-		end, function()
-			return r().dir
-		end, 16),
-		ui.text {
-			function()
-				return r().name
-			end,
-			literal = true,
-			truncate = true,
-			min_w = 0,
+		ui.row {
 			grow = 1,
+			min_w = 0,
+			gap = 8,
+			items = "center",
+			opacity = cut_opacity(r),
+			common.file_icon(function()
+				return r().icon
+			end, function()
+				return r().dir
+			end, 16),
+			name_cell(r, function()
+				return index:peek()
+			end, true),
 		},
 		ui.text {
 			function()
@@ -310,25 +494,34 @@ local function grid_cell(i: number): Node
 		on_mount = entrance(function()
 			return i
 		end),
-		common.file_icon(function()
-			local x = r()
-			return if x then x.icon else ""
-		end, function()
-			local x = r()
-			return x ~= nil and x.dir
-		end, icon, true),
-		ui.text {
-			function()
-				local x = r()
-				return if x then x.name else ""
-			end,
-			literal = true,
-			align = "center",
-			wrap = true,
-			lines = 2,
-			truncate = true,
+		ui.column {
 			w_full = true,
-			text_size = "$font.size.sm",
+			gap = 6,
+			items = "center",
+			opacity = function()
+				local x = r()
+				return if x and state.is_cut(x.id) then 0.45 else 1
+			end,
+			common.file_icon(function()
+				local x = r()
+				return if x then x.icon else ""
+			end, function()
+				local x = r()
+				return x ~= nil and x.dir
+			end, icon, true),
+			ui.text {
+				function()
+					local x = r()
+					return if x then x.name else ""
+				end,
+				literal = true,
+				align = "center",
+				wrap = true,
+				lines = 2,
+				truncate = true,
+				w_full = true,
+				text_size = "$font.size.sm",
+			},
 		},
 	}, item_handlers(function()
 		return i
@@ -463,6 +656,10 @@ local function empty_or_error(): Node
 				return if state.rows:len() == 0 then "This folder is empty." else ""
 			end,
 			color = "$text.secondary",
+			wrap = true,
+			align = "center",
+			max_w = 520,
+			px = 24,
 		},
 	}
 end
@@ -490,6 +687,32 @@ return function(): Node
 		focusable = true,
 		label = "Items",
 		on_key = on_list_key,
+		-- Right-click on empty space: the folder's own menu (New, Paste, ...).
+		context_menu = function()
+			ui.invoke("background_menu")
+			return nil
+		end,
+		-- Files dropped on empty space land in this folder: from other apps,
+		-- or dragged in Pane from another folder (a folder that sprang open).
+		on_file_drop = function(files)
+			drop_on(nil, file_paths(files))
+		end,
+		drop_when = function(payload: any)
+			if type(payload) ~= "table" or payload.paths == nil or not state.nav:peek() then
+				return false
+			end
+			local here = string.lower(state.nav:peek().path)
+			for _, p in payload.paths do
+				local parent = string.lower(string.match(p, "^(.*)[/\\][^/\\]+$") or "")
+				if parent ~= here and parent .. "\\" ~= here then
+					return true
+				end
+			end
+			return false
+		end,
+		on_drop = function(payload: Drag)
+			drop_on(nil, payload.paths)
+		end,
 		-- A click on empty space clears the selection.
 		on_click = function(e)
 			if not e.ctrl and not e.shift then

@@ -208,7 +208,7 @@ function M.meter(props: { [string]: any }): Node
 			props.glow()
 		end
 		-- While scanning, bands follow the live totals quickly; otherwise ease.
-		apply(if not moving:peek() then 0 elseif scanning:peek() then 160 else 700)
+		apply(if not moving:peek() then 0 elseif scanning:peek() then 90 else 700)
 	end)
 
 	-- Scanning: run the shimmer; stop it when done so an idle meter costs nothing.
