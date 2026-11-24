@@ -1,6 +1,6 @@
 # Pane
 
-A fast, light file explorer for Windows 11, built with Rust and [zgx](https://github.com/zeronsh/zgx).
+A fast, light file explorer for Windows 11, built with Rust and [zgx](https://github.com/zeronsh/zgx). It opens on a **Storage Overview**: an LED dot-matrix breakdown of what fills your drive, and what you can clear.
 
 ## Layout
 
@@ -8,8 +8,10 @@ A fast, light file explorer for Windows 11, built with Rust and [zgx](https://gi
 | --- | --- |
 | `crates/pane-fs` | File system core: folder listing (`FindFirstFileExW`), natural sort, folder change watching, formatting. |
 | `crates/pane-shell` | Windows shell: Explorer's right-click menu (`IContextMenu`), file icons, known folders, drives, opening files. |
+| `crates/pane-scan` | Storage scanning: category rules, a parallel folder walk (no admin), an NTFS master-file-table reader (instant), the result cache, and the helper-service protocol and client. |
+| `crates/pane-scan-service` | The optional helper service (LocalSystem) that reads the MFT for instant scans, over a pipe only the installing user can open. |
 | `crates/pane-app` | The `pane` binary: tabs and history (`nav.rs`), selection rules (`selection.rs`), settings (`settings.rs`), icons (`icons.rs`), and the state the UI reads (`app.rs`). |
-| `ui/` | The interface, in Luau: `app.luau` (layout, shortcuts), `state.luau` (what Rust publishes), `components/` (tabs, toolbar, sidebar, views). Reloads live while the app runs. |
+| `ui/` | The interface, in Luau: `app.luau` (layout, shortcuts), `state.luau` (what Rust publishes), `theme.luau` (Pane Amber themes and the customizer's accent logic), `components/` (tabs, toolbar, sidebar, views, overview, meter, icons, customize). Reloads live while the app runs. |
 
 ## Build and run
 
@@ -39,3 +41,13 @@ zgx is pinned to the `v0.1.10` tag, and its patched `winit`, `wgpu-hal` and Acce
 | Ctrl+A, Esc | Select all, select none |
 
 Middle click opens a folder in a new tab, or closes a tab. Settings live in `%APPDATA%\Pane\settings.json`.
+
+## Instant scans
+
+The Overview works without admin rights by walking folders (about 9 s for 1.8M files on an SSD). "Enable instant scan" installs `pane-scan-service` once (one UAC prompt): it is copied to `%ProgramFiles%\Pane`, registered as the demand-start service `PaneScan` that only the installing user may start, and it stops itself after a minute idle. It reads the drive's master file table (about 5 s for C: here) and never names files in other users' profiles. Turn it off from the ⋯ menu ("Turn off instant scan…"), or run `pane-scan-service uninstall` elevated.
+
+Scan a drive from the command line: `cargo run --release -p pane-scan --example scan -- C:\ [--mft]` (`--mft` needs an elevated prompt).
+
+## Design
+
+Fonts: [Geist Mono](https://github.com/vercel/geist-font) (SIL Open Font License, `assets/fonts/GeistMono-OFL.txt`) for numbers and paths; Segoe UI Variable for text. Icons are Pane's own (`ui/components/icons.luau`).

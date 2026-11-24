@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/pane-fs", "crates/pane-shell", "crates/pane-app"]
+members = ["crates/pane-fs", "crates/pane-shell", "crates/pane-scan", "crates/pane-scan-service", "crates/pane-app"]
 
 [workspace.package]
 version = "0.1.0"
@@ -19,6 +19,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 pane-fs = { path = "crates/pane-fs" }
 pane-shell = { path = "crates/pane-shell" }
+pane-scan = { path = "crates/pane-scan" }
 
 # zgx patches these in its own repository only; an app has to repeat the
 # patches to get the fixes (a covered Windows window keeps drawing otherwise,

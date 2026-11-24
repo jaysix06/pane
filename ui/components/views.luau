@@ -3,7 +3,35 @@
 -- screen are built, so 100,000 items cost what 30 do.
 
 local state = require("../state")
+local theme = require("../theme")
 local common = require("./common")
+
+local motion = theme.motion(state.setting)
+
+-- When the current folder's rows last changed: rows mounting soon after
+-- fade in with a short stagger (scrolling later mounts rows without it).
+local loaded_at = 0
+ui.effect(function()
+	state.rows:len()
+	state.nav:get()
+	loaded_at = ui.now()
+end)
+
+local function entrance(index: () -> number)
+	return function(el)
+		if not motion() or ui.now() - loaded_at > 350 then
+			return
+		end
+		local i = math.min(index(), 24)
+		anime.animate(el, {
+			opacity = { 0, 1 },
+			translateY = { 6, 0 },
+			duration = 280,
+			delay = (i - 1) * 12,
+			ease = "out(3)",
+		})
+	end
+end
 
 local DETAILS_ROW = 30
 local LIST_ROW = 26
@@ -68,7 +96,14 @@ local function header_cell(label: string, key: string, width: number?, align: st
 		justify = if align == "end" then "end" else "start",
 		items = "center",
 		gap = 4,
-		ui.text { label, color = "$text.secondary", text_size = "$font.size.sm", truncate = true },
+		ui.text {
+			string.upper(label),
+			font = "$font.mono",
+			text_size = 10.5,
+			letter_spacing = 1,
+			color = "$text.tertiary",
+			truncate = true,
+		},
 		ui.text {
 			function()
 				local n = state.nav:get()
@@ -77,7 +112,7 @@ local function header_cell(label: string, key: string, width: number?, align: st
 				end
 				return if n.descending then "▾" else "▴"
 			end,
-			color = "$text.tertiary",
+			color = "$accent",
 			text_size = 10,
 		},
 	}
@@ -114,14 +149,21 @@ local function details_row(_item: state.Row, index: State<number>, row: State<st
 		selected = function()
 			return state.is_selected(r().id)
 		end,
+		relative = true,
 		w_full = true,
 		h = DETAILS_ROW,
-		px = 10,
+		px = 12,
 		gap = 12,
 		items = "center",
-		rounded = 4,
+		rounded = "$radius.sm",
 		bg = selected_bg(r),
 		hover = { bg = "$hover" },
+		on_mount = entrance(function()
+			return index:peek()
+		end),
+		common.pip(function()
+			return state.is_selected(r().id)
+		end),
 		ui.row {
 			grow = 1,
 			min_w = 0,
@@ -132,9 +174,27 @@ local function details_row(_item: state.Row, index: State<number>, row: State<st
 			end, 18),
 			ui.text { field("name"), literal = true, truncate = true, min_w = 0 },
 		},
-		ui.text { field("date"), literal = true, w = COL_DATE, shrink = 0, color = "$text.secondary", truncate = true },
+		ui.text {
+			field("date"),
+			literal = true,
+			w = COL_DATE,
+			shrink = 0,
+			color = "$text.secondary",
+			font = "$font.mono",
+			text_size = 12,
+			truncate = true,
+		},
 		ui.text { field("kind"), literal = true, w = COL_TYPE, shrink = 0, color = "$text.secondary", truncate = true },
-		ui.text { field("size"), literal = true, w = COL_SIZE, shrink = 0, align = "end", color = "$text.secondary" },
+		ui.text {
+			field("size"),
+			literal = true,
+			w = COL_SIZE,
+			shrink = 0,
+			align = "end",
+			color = "$text.secondary",
+			font = "$font.mono",
+			text_size = 12,
+		},
 	}, item_handlers(function()
 		return index:peek()
 	end, function()
@@ -156,14 +216,21 @@ local function list_row(_item: state.Row, index: State<number>, row: State<state
 		selected = function()
 			return state.is_selected(r().id)
 		end,
+		relative = true,
 		w_full = true,
 		h = LIST_ROW,
-		px = 10,
+		px = 12,
 		gap = 8,
 		items = "center",
-		rounded = 4,
+		rounded = "$radius.sm",
 		bg = selected_bg(r),
 		hover = { bg = "$hover" },
+		on_mount = entrance(function()
+			return index:peek()
+		end),
+		common.pip(function()
+			return state.is_selected(r().id)
+		end),
 		common.file_icon(function()
 			return r().icon
 		end, function()
@@ -184,7 +251,8 @@ local function list_row(_item: state.Row, index: State<number>, row: State<state
 			end,
 			literal = true,
 			color = "$text.tertiary",
-			text_size = "$font.size.sm",
+			font = "$font.mono",
+			text_size = 11.5,
 			shrink = 0,
 		},
 	}, item_handlers(function()
@@ -222,12 +290,26 @@ local function grid_cell(i: number): Node
 		p = 6,
 		gap = 6,
 		items = "center",
-		rounded = 6,
+		rounded = "$radius.lg",
+		border = 1,
+		border_color = function()
+			local x = r()
+			return if x and state.is_selected(x.id) then "$focus.ring" else "#00000000"
+		end,
+		shadow = function()
+			local x = r()
+			return if x and state.is_selected(x.id)
+				then { x = 0, y = 0, blur = 16, spread = 0, color = "$app.glow" }
+				else false
+		end,
 		bg = function()
 			local x = r()
 			return if x and state.is_selected(x.id) then "$selection.item" else "#00000000"
 		end,
 		hover = { bg = "$hover" },
+		on_mount = entrance(function()
+			return i
+		end),
 		common.file_icon(function()
 			local x = r()
 			return if x then x.icon else ""

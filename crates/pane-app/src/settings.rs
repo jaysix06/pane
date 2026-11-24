@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 /// Bump when a field changes meaning; `migrate` upgrades older files.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -18,7 +18,7 @@ pub struct Settings {
     pub version: u32,
 
     // General
-    /// "home", "this_pc", "downloads", or a folder path.
+    /// "overview", "home", "this_pc", "downloads", or a folder path.
     pub start_folder: String,
     pub restore_session: bool,
     pub open_folders_in_new_tab: bool,
@@ -28,8 +28,12 @@ pub struct Settings {
     // Appearance
     /// "system", "light" or "dark".
     pub theme: String,
-    /// "system" or "#rrggbb".
+    /// "system" or "#rrggbb" (Pane's amber by default).
     pub accent: String,
+    /// Glow intensity of meters, focus rings and selection, 0..100.
+    pub glow: u32,
+    /// "soft" (rounded) or "sharp" corners.
+    pub corners: String,
     /// "mica", "mica_alt", "acrylic" or "solid".
     pub backdrop: String,
     /// "comfortable" or "compact".
@@ -81,13 +85,15 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             version: VERSION,
-            start_folder: "home".into(),
+            start_folder: "overview".into(),
             restore_session: true,
             open_folders_in_new_tab: false,
             single_click_open: false,
             language: "system".into(),
             theme: "system".into(),
-            accent: "system".into(),
+            accent: "#FFB020".into(),
+            glow: 70,
+            corners: "soft".into(),
             backdrop: "mica".into(),
             density: "comfortable".into(),
             text_size: 14.0,
@@ -214,8 +220,10 @@ impl Settings {
         one_of(&mut self.density, &["comfortable", "compact"], "comfortable");
         one_of(&mut self.default_view, &["details", "list", "grid"], "details");
         one_of(&mut self.animations, &["system", "on", "off"], "system");
+        one_of(&mut self.corners, &["soft", "sharp"], "soft");
+        self.glow = self.glow.min(100);
         if self.accent != "system" && !is_hex_color(&self.accent) {
-            self.accent = "system".into();
+            self.accent = Settings::default().accent;
         }
         self.text_size = self.text_size.clamp(11.0, 20.0);
         self.icon_size = self.icon_size.clamp(32, 128);
@@ -231,8 +239,20 @@ fn is_hex_color(s: &str) -> bool {
 }
 
 /// Upgrades an older file's JSON to the current shape.
-fn migrate(v: serde_json::Value) -> serde_json::Value {
-    // Version 1 is the first; later versions add steps here, oldest first.
+fn migrate(mut v: serde_json::Value) -> serde_json::Value {
+    let version = v.get("version").and_then(|x| x.as_u64()).unwrap_or(1);
+    if version < 2 {
+        // 2: Pane's own look. The old defaults (system accent, start in the
+        // user folder) become amber and the Storage Overview.
+        if let Some(map) = v.as_object_mut() {
+            if map.get("accent").and_then(|a| a.as_str()) == Some("system") {
+                map.insert("accent".into(), serde_json::json!("#FFB020"));
+            }
+            if map.get("start_folder").and_then(|a| a.as_str()) == Some("home") {
+                map.insert("start_folder".into(), serde_json::json!("overview"));
+            }
+        }
+    }
     v
 }
 
@@ -264,7 +284,7 @@ mod tests {
     #[test]
     fn missing_fields_take_defaults() {
         let path = temp("partial");
-        std::fs::write(&path, r#"{ "version": 1, "show_hidden": true }"#).unwrap();
+        std::fs::write(&path, r#"{ "version": 2, "show_hidden": true }"#).unwrap();
         let (s, _) = Settings::load(&path);
         assert!(s.show_hidden);
         assert_eq!(s.theme, "system");
@@ -282,6 +302,17 @@ mod tests {
     }
 
     #[test]
+    fn version_1_moves_to_the_new_look() {
+        let path = temp("v1");
+        std::fs::write(&path, r#"{ "version": 1, "accent": "system", "start_folder": "home", "show_hidden": true }"#).unwrap();
+        let (s, _) = Settings::load(&path);
+        assert_eq!(s.version, VERSION);
+        assert_eq!(s.accent, "#FFB020");
+        assert_eq!(s.start_folder, "overview");
+        assert!(s.show_hidden, "other choices are kept");
+    }
+
+    #[test]
     fn set_field_validates() {
         let mut s = Settings::default();
         assert!(s.set_field("show_hidden", serde_json::json!(true)).is_ok());
@@ -293,6 +324,14 @@ mod tests {
         assert_eq!(s.theme, "system");
         s.set_field("text_size", serde_json::json!(99)).unwrap();
         assert_eq!(s.text_size, 20.0);
+        s.set_field("accent", serde_json::json!("#12ab34")).unwrap();
+        assert_eq!(s.accent, "#12ab34");
+        s.set_field("accent", serde_json::json!("orange")).unwrap();
+        assert_eq!(s.accent, "#FFB020", "bad colours fall back to Pane's amber");
+        s.set_field("glow", serde_json::json!(250)).unwrap();
+        assert_eq!(s.glow, 100);
+        s.set_field("corners", serde_json::json!("wobbly")).unwrap();
+        assert_eq!(s.corners, "soft");
     }
 
     #[test]

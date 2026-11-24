@@ -4,9 +4,12 @@
 use std::path::{Component, Path, PathBuf};
 
 pub const THIS_PC: &str = "::thispc";
+pub const OVERVIEW: &str = "::overview";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Location {
+    /// The Storage Overview: Pane's home.
+    Overview,
     /// The drives, as Explorer's "This PC".
     ThisPc,
     Folder(PathBuf),
@@ -15,13 +18,18 @@ pub enum Location {
 impl Location {
     /// From the UI's string form: a path, or `THIS_PC`.
     pub fn from_ui(s: &str) -> Location {
-        if s == THIS_PC { Location::ThisPc } else { Location::Folder(PathBuf::from(s)) }
+        match s {
+            THIS_PC => Location::ThisPc,
+            OVERVIEW => Location::Overview,
+            _ => Location::Folder(PathBuf::from(s)),
+        }
     }
 
     /// The string the UI passes back to `from_ui`.
     pub fn to_ui(&self) -> String {
         match self {
             Location::ThisPc => THIS_PC.into(),
+            Location::Overview => OVERVIEW.into(),
             Location::Folder(p) => p.display().to_string(),
         }
     }
@@ -31,6 +39,7 @@ impl Location {
     pub fn title(&self) -> String {
         match self {
             Location::ThisPc => "This PC".into(),
+            Location::Overview => "Overview".into(),
             Location::Folder(p) => match p.file_name() {
                 Some(name) => name.to_string_lossy().into_owned(),
                 None => p.display().to_string().trim_end_matches('\\').to_string(),
@@ -42,6 +51,7 @@ impl Location {
     pub fn address(&self) -> String {
         match self {
             Location::ThisPc => "This PC".into(),
+            Location::Overview => "Overview".into(),
             Location::Folder(p) => p.display().to_string(),
         }
     }
@@ -49,7 +59,7 @@ impl Location {
     /// One level up: a drive's root goes to This PC.
     pub fn parent(&self) -> Option<Location> {
         match self {
-            Location::ThisPc => None,
+            Location::ThisPc | Location::Overview => None,
             Location::Folder(p) => Some(match p.parent() {
                 Some(parent) => Location::Folder(parent.to_path_buf()),
                 None => Location::ThisPc,
@@ -59,6 +69,9 @@ impl Location {
 
     /// Breadcrumbs: ("This PC", ThisPc), ("C:", C:\), ("Users", C:\Users)...
     pub fn crumbs(&self) -> Vec<(String, Location)> {
+        if *self == Location::Overview {
+            return vec![("Overview".to_string(), Location::Overview)];
+        }
         let mut out = vec![("This PC".to_string(), Location::ThisPc)];
         let Location::Folder(path) = self else { return out };
         let mut acc = PathBuf::new();
@@ -136,6 +149,9 @@ pub fn parse_address(text: &str, current: &Location, home: &Path) -> Option<Loca
     }
     if text.eq_ignore_ascii_case("this pc") || text.eq_ignore_ascii_case("computer") {
         return Some(Location::ThisPc);
+    }
+    if text.eq_ignore_ascii_case("overview") || text.eq_ignore_ascii_case("storage") {
+        return Some(Location::Overview);
     }
     let expanded = expand_env(text);
     let mut path = if expanded == "~" {
@@ -232,6 +248,7 @@ mod tests {
         assert_eq!(folder("C:\\Users").parent(), Some(folder("C:\\")));
         assert_eq!(folder("C:\\").parent(), Some(Location::ThisPc));
         assert_eq!(Location::ThisPc.parent(), None);
+        assert_eq!(Location::Overview.parent(), None);
     }
 
     #[test]
@@ -254,6 +271,9 @@ mod tests {
         assert_eq!(folder("C:\\Users\\me").title(), "me");
         assert_eq!(folder("C:\\").title(), "C:");
         assert_eq!(Location::ThisPc.title(), "This PC");
+        assert_eq!(Location::Overview.title(), "Overview");
+        assert_eq!(Location::from_ui(OVERVIEW), Location::Overview);
+        assert_eq!(Location::Overview.crumbs().len(), 1);
     }
 
     #[test]
@@ -262,6 +282,7 @@ mod tests {
         let here = folder("C:\\Work");
         assert_eq!(parse_address("  \"C:\\Temp\"  ", &here, home), Some(folder("C:\\Temp")));
         assert_eq!(parse_address("this pc", &here, home), Some(Location::ThisPc));
+        assert_eq!(parse_address("Overview", &here, home), Some(Location::Overview));
         assert_eq!(parse_address("~", &here, home), Some(folder("C:\\Users\\me")));
         assert_eq!(parse_address("~\\Desktop", &here, home), Some(folder("C:\\Users\\me\\Desktop")));
         assert_eq!(parse_address("sub\\..\\other", &here, home), Some(folder("C:\\Work\\other")));

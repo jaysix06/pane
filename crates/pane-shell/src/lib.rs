@@ -17,7 +17,7 @@ pub use icons::{Icon, icon_rgba};
 #[cfg(windows)]
 pub use places::{Drive, DriveKind, Place, drives, known_folders};
 #[cfg(windows)]
-pub use win::{active_window, init_com, open_path};
+pub use win::{active_window, empty_recycle_bin, init_com, open_path, run_elevated_and_wait};
 
 #[cfg(all(test, windows))]
 mod tests {

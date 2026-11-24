@@ -7,7 +7,9 @@ mod app;
 mod icons;
 mod nav;
 mod selection;
+mod service;
 mod settings;
+mod storage;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -24,7 +26,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ui_dir = ui_dir();
     let start = std::env::args_os().nth(1).map(PathBuf::from).filter(|p| p.is_dir());
 
-    Application::new()
+    let mut application = Application::new();
+    // Geist Mono (SIL OFL, assets/fonts) for readouts, paths and numbers.
+    for bytes in [
+        &include_bytes!("../../../assets/fonts/GeistMono-Regular.ttf")[..],
+        &include_bytes!("../../../assets/fonts/GeistMono-Medium.ttf")[..],
+        &include_bytes!("../../../assets/fonts/GeistMono-SemiBold.ttf")[..],
+    ] {
+        match zgx_desktop::FontData::new(bytes) {
+            Ok(font) => application = application.font(font),
+            Err(e) => eprintln!("bundled font failed to load: {e}"),
+        }
+    }
+    application
         .window(WindowOptions {
             title: "Pane".into(),
             width: 1240.,
@@ -45,7 +59,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             host.window_size(cx.viewport.clone());
 
             let app = app::App::start(&host, &cx.tasks, start.clone());
+            let storage = storage::Storage::start(&host, &cx.tasks);
             register_actions(&host, &app, cx.window.clone());
+            register_storage_actions(&host, &app, &storage);
 
             if let Err(e) = host.reload() {
                 eprintln!("script error: {e}");
@@ -208,6 +224,47 @@ fn register_actions(host: &ScriptHost, app: &AppRef, window: zgx_desktop::Window
             app::pin(a, &p.display().to_string());
         }
     });
+}
+
+/// The Overview's actions.
+fn register_storage_actions(host: &ScriptHost, app: &AppRef, storage: &storage::StorageRef) {
+    let on = |name: &str, f: fn(&AppRef, &storage::StorageRef, &Value)| {
+        let (app, storage) = (app.clone(), storage.clone());
+        host.action(name, move |arg| f(&app, &storage, &arg));
+    };
+    on("storage_scan", |_, s, _| storage::rescan(s));
+    on("storage_select", |_, s, arg| {
+        if let Some(v) = str_arg(arg) {
+            storage::select(s, v);
+        }
+    });
+    on("storage_drill", |_, s, arg| storage::drill(s, str_arg(arg)));
+    // A folder or file from the Overview: opens in a new tab (a file's folder).
+    on("storage_open", |a, _, arg| {
+        if let Some(p) = str_arg(arg) {
+            open_in_new_tab(a, p);
+        }
+    });
+    on("cleanup_review", |a, s, arg| {
+        if let Some(target) = str_arg(arg).and_then(|id| storage::cleanup_target(s, id)) {
+            open_in_new_tab(a, &target);
+        }
+    });
+    on("enable_instant_scan", |_, s, _| storage::set_instant(s, true));
+    on("remove_instant_scan", |_, s, _| storage::set_instant(s, false));
+    on("empty_recycle_bin", |_, s, _| {
+        if pane_shell::empty_recycle_bin(pane_shell::active_window()) {
+            storage::recycle_bin_emptied(s);
+        }
+    });
+}
+
+fn open_in_new_tab(app: &AppRef, path: &str) {
+    let p = PathBuf::from(path);
+    let folder = if p.is_dir() { Some(p) } else { p.parent().map(PathBuf::from) };
+    if let Some(folder) = folder {
+        app::new_tab_at(app, Location::Folder(folder), true);
+    }
 }
 
 fn str_arg(v: &Value) -> Option<&str> {

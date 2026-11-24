@@ -61,6 +61,7 @@ impl Tab {
     pub fn path_of(&self, i: usize) -> Option<PathBuf> {
         match &self.history.current {
             Location::ThisPc => self.roots.get(i).cloned(),
+            Location::Overview => None,
             Location::Folder(dir) => self.entries.get(i).map(|e| dir.join(&e.name)),
         }
     }
@@ -288,7 +289,7 @@ pub fn load(app: &AppRef, index: usize, keep_selection: bool) {
                     let size = icon_size(&tab.view);
                     let folder = match &location {
                         Location::Folder(p) => Some(p.clone()),
-                        Location::ThisPc => None,
+                        Location::ThisPc | Location::Overview => None,
                     };
                     match folder {
                         Some(f) => a.icons.request_entries(&f, &a.tabs[index].entries, &keys, size),
@@ -329,6 +330,8 @@ pub fn load(app: &AppRef, index: usize, keep_selection: bool) {
 fn list_location(location: &Location, opts: ListOptions) -> Result<Listing, String> {
     let started = Instant::now();
     match location {
+        // The Overview has no listing: storage.rs publishes its contents.
+        Location::Overview => Ok(Listing { entries: Vec::new(), roots: Vec::new(), texts: Vec::new(), took: started.elapsed() }),
         Location::ThisPc => {
             let drives = pane_shell::drives();
             let mut entries = Vec::new();
@@ -690,7 +693,7 @@ pub fn set_view(app: &AppRef, view: &str) {
                 let keys: Vec<String> = tab.entries.iter().map(|e| icons::key_for(e, dir)).collect();
                 a.icons.request_entries(dir, &tab.entries, &keys, Size::Large);
             }
-            Location::ThisPc => {
+            Location::ThisPc | Location::Overview => {
                 for root in &tab.roots {
                     a.icons.request(&format!("p:{}", root.display()), root, Size::Large);
                 }
@@ -781,7 +784,7 @@ fn ensure_watch(app: &AppRef) {
     let mut a = app.borrow_mut();
     let wanted = match &a.tab().history.current {
         Location::Folder(p) => Some(p.clone()),
-        Location::ThisPc => None,
+        Location::ThisPc | Location::Overview => None,
     };
     if a.watcher.as_ref().map(|(p, _)| p) == wanted.as_ref() {
         return;
@@ -941,6 +944,7 @@ fn publish_nav(app: &AppRef) {
         ("address", Value::from(location.address().as_str())),
         ("path", Value::from(location.to_ui().as_str())),
         ("this_pc", Value::from(matches!(location, Location::ThisPc))),
+        ("overview", Value::from(matches!(location, Location::Overview))),
         ("sort", Value::from(sort)),
         ("descending", Value::from(tab.descending)),
         ("view", Value::from(tab.view.as_str())),
@@ -987,6 +991,7 @@ fn status_text(tab: &Tab) -> String {
 
 pub fn start_location(settings: &Settings, home: &Path) -> Location {
     match settings.start_folder.as_str() {
+        "overview" => Location::Overview,
         "home" => Location::Folder(home.to_path_buf()),
         "this_pc" => Location::ThisPc,
         "downloads" => {

@@ -3,22 +3,16 @@
 -- it publishes); this file lays it out and maps keys to actions.
 
 local state = require("./state")
+local theme = require("./theme")
 local Tabs = require("./components/tabs")
 local Toolbar = require("./components/toolbar")
 local Sidebar = require("./components/sidebar")
 local Views = require("./components/views")
+local Overview = require("./components/overview")
+local customize = require("./components/customize")
 
--- Light / dark: the system's, unless Settings chooses one.
-ui.effect(function()
-	local theme = state.setting("theme")
-	if theme == "light" then
-		ui.theme.set("zgx-light")
-	elseif theme == "dark" then
-		ui.theme.set("zgx-dark")
-	else
-		ui.theme.follow_system { dark = "zgx-dark", light = "zgx-light" }
-	end
-end)
+-- Pane Amber, dark or light as Settings say (theme.luau).
+theme.follow(state.setting)
 
 -- Messages from Rust (an error, a recovered settings file) as toasts.
 local last_toast = 0
@@ -84,16 +78,24 @@ local function status_bar(): Node
 			function()
 				return state.status:get()
 			end,
-			color = "$text.secondary",
-			text_size = "$font.size.sm",
+			color = "$text.tertiary",
+			font = "$font.mono",
+			text_size = 11.5,
 			truncate = true,
 		},
 	}
 end
 
+local function is_overview(): boolean
+	local n = state.nav:get()
+	return n ~= nil and n.overview == true
+end
+
 return ui.column {
 	w_full = true,
 	h_full = true,
+	-- The accent, glow and corners from Settings, over the whole window.
+	theme = theme.scope(state.setting),
 	on_key = on_key,
 	-- The mouse's back and forward buttons.
 	on_aux_click = function(e)
@@ -119,13 +121,20 @@ return ui.column {
 				min_w = 0,
 				h_full = true,
 				bg = "$surface.base",
-				rounded_tl = 8,
+				rounded_tl = "$radius.lg",
 				border_sides = { 1, 0, 0, 1 },
 				border_color = "$border.subtle",
+				inset_shadow = { x = 0, y = 1, color = "$app.highlight" },
 				overflow = "hidden",
-				Views(),
-				status_bar(),
+				ui.show(is_overview, Overview(), ui.column {
+					grow = 1,
+					w_full = true,
+					min_h = 0,
+					Views(),
+					status_bar(),
+				}),
 			},
 		},
 	},
+	customize.sheet(),
 }

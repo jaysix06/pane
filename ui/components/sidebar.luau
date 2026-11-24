@@ -1,8 +1,12 @@
--- The sidebar: pinned folders (Quick access), the user's folders, and This
--- PC with its drives. Ctrl+click or middle click opens in a new tab.
+-- The sidebar: Overview (the storage home), pinned folders, the user's
+-- folders, and drives with mini dot-matrix meters. The current place gets
+-- an amber LED pip. Ctrl+click or middle click opens in a new tab.
 
 local state = require("../state")
+local theme = require("../theme")
 local common = require("./common")
+local icons = require("./icons")
+local meter = require("./meter")
 
 local function is_here(path: string): () -> boolean
 	return function()
@@ -21,30 +25,66 @@ local function open_place(path: string)
 	end
 end
 
-local function item(place: state.Place, opts: { usage: boolean? }?): Node
-	local here = is_here(place.path)
-	local usage = opts and opts.usage
+-- One row: pip, icon (shell icon or one of Pane's), label.
+local function row(props: {
+	label: string,
+	path: string,
+	here: () -> boolean,
+	icon: Node,
+	extra: Node?,
+	menu: (() -> { Node })?,
+	h: number?,
+}): Node
 	return ui.row {
 		role = "link",
-		label = place.label,
-		selected = here,
+		label = props.label,
+		selected = props.here,
+		relative = true,
 		w_full = true,
-		h = if usage then 44 else 32,
-		px = 10,
+		h = props.h or 32,
+		pl = 12,
+		pr = 8,
 		gap = 10,
 		items = "center",
-		rounded = 6,
+		rounded = "$radius.md",
 		bg = function()
-			return if here() then "$selection.item" else "#00000000"
+			return if props.here() then "$selection.item" else "#00000000"
 		end,
-		hover = { bg = "$hover" },
-		on_click = open_place(place.path),
+		color = function()
+			return if props.here() then "$text.primary" else "$text.secondary"
+		end,
+		hover = { bg = "$hover", color = "$text.primary" },
+		on_click = open_place(props.path),
 		on_aux_click = function(e)
 			if e.button == "middle" then
-				ui.invoke("navigate_new_tab", place.path)
+				ui.invoke("navigate_new_tab", props.path)
 			end
 		end,
-		context_menu = function()
+		context_menu = props.menu,
+		common.pip(props.here),
+		props.icon,
+		ui.column {
+			grow = 1,
+			min_w = 0,
+			gap = 4,
+			ui.text { props.label, literal = true, truncate = true },
+			props.extra,
+		},
+	}
+end
+
+local function place_row(place: state.Place): Node
+	local here = is_here(place.path)
+	return row {
+		label = place.label,
+		path = place.path,
+		here = here,
+		icon = common.file_icon(function()
+			return place.icon
+		end, function()
+			return true
+		end, 18),
+		menu = function()
 			local items = {
 				ui.menu_item {
 					"Open in new tab",
@@ -53,72 +93,84 @@ local function item(place: state.Place, opts: { usage: boolean? }?): Node
 					end,
 				},
 			}
-			if place.pinned then
-				table.insert(
-					items,
-					ui.menu_item {
+			table.insert(
+				items,
+				if place.pinned
+					then ui.menu_item {
 						"Unpin from Quick access",
 						on_click = function()
 							ui.invoke("unpin", place.path)
 						end,
 					}
-				)
-			elseif not usage then
-				table.insert(
-					items,
-					ui.menu_item {
+					else ui.menu_item {
 						"Pin to Quick access",
 						on_click = function()
 							ui.invoke("pin", place.path)
 						end,
 					}
-				)
-			end
+			)
 			return items
 		end,
-		common.file_icon(function()
+	}
+end
+
+-- A drive's mini meter: its category breakdown when a scan knows it, else
+-- just how full it is.
+local function drive_data(place: state.Place): () -> meter.MeterData?
+	return function()
+		local s = state.storage:get()
+		local letter = string.sub(place.path, 1, 2)
+		if s and s.drives then
+			for _, d in s.drives do
+				if string.lower(d.letter) == string.lower(letter) and d.categories then
+					return { bytes = d.categories, total = d.total }
+				end
+			end
+		end
+		return { bytes = { apps = (place.used or 0) }, total = 1 }
+	end
+end
+
+local function drive_row(place: state.Place): Node
+	local here = is_here(place.path)
+	return row {
+		label = place.label,
+		path = place.path,
+		here = here,
+		h = 50,
+		icon = common.file_icon(function()
 			return place.icon
 		end, function()
 			return true
 		end, 18),
-		ui.column {
-			grow = 1,
-			min_w = 0,
+		extra = ui.column {
 			gap = 3,
-			ui.text { place.label, literal = true, truncate = true },
-			ui.show(
-				usage == true,
-				ui.column {
-					gap = 2,
-					w_full = true,
-					ui.div {
-						w_full = true,
-						h = 4,
-						rounded = 2,
-						bg = "$border.subtle",
-						overflow = "hidden",
-						ui.div {
-							h_full = true,
-							w = `{math.floor((place.used or 0) * 100)}%`,
-							rounded = 2,
-							-- Explorer's warning colour once a drive is 90% full.
-							bg = if (place.used or 0) > 0.9 then "$danger" else "$accent",
-						},
-					},
-					ui.text {
-						place.detail or "",
-						literal = true,
-						text_size = 11,
-						color = "$text.tertiary",
-						truncate = true,
-					},
-				}
-			),
+			w_full = true,
+			meter.meter {
+				data = drive_data(place),
+				glow = function()
+					return (state.setting("glow") or 70) / 100 * 0.6
+				end,
+				motion = theme.motion(state.setting),
+				dot = 3,
+				gap = 1.5,
+				w_full = true,
+				h = 8,
+				label = `{place.label}: {math.floor((place.used or 0) * 100)}% used`,
+			},
+			ui.text {
+				place.detail or "",
+				literal = true,
+				font = "$font.mono",
+				text_size = 10.5,
+				color = "$text.tertiary",
+				truncate = true,
+			},
 		},
 	}
 end
 
-local function section(title: string, list: () -> { state.Place }, opts: { usage: boolean? }?): Node
+local function section(title: string, list: () -> { state.Place }, build: (state.Place) -> Node): Node
 	local items = ui.computed(list)
 	return ui.show(
 		function()
@@ -127,10 +179,10 @@ local function section(title: string, list: () -> { state.Place }, opts: { usage
 		ui.column {
 			w_full = true,
 			gap = 1,
-			pb = 10,
-			ui.text { title, text_size = 11, bold = true, color = "$text.tertiary", px = 10, pt = 4, pb = 4 },
+			pb = 12,
+			ui.div { px = 12, pt = 2, pb = 6, common.caption(title) },
 			ui.each(items, function(place: state.Place)
-				return item(place, opts)
+				return build(place)
 			end),
 		}
 	)
@@ -145,46 +197,43 @@ end
 
 return function(): Node
 	return ui.scroll {
-		w = 236,
+		w = 240,
 		h_full = true,
 		shrink = 0,
 		px = 8,
-		py = 6,
+		pb = 8,
 		gap = 0,
-		section("Quick access", places_field("pinned")),
-		section("Folders", places_field("known")),
+		ui.column {
+			w_full = true,
+			pb = 12,
+			row {
+				label = "Overview",
+				path = "::overview",
+				here = function()
+					local n = state.nav:get()
+					return n ~= nil and n.overview == true
+				end,
+				icon = ui.div { color = "$accent", icons.icon("overview", 18) },
+			},
+		},
+		section("Quick access", places_field("pinned"), place_row),
+		section("Folders", places_field("known"), place_row),
 		ui.column {
 			w_full = true,
 			gap = 1,
-			ui.row {
-				role = "link",
-				label = "This PC",
-				w_full = true,
-				h = 32,
-				px = 10,
-				gap = 10,
-				items = "center",
-				rounded = 6,
-				bg = function()
+			ui.div { px = 12, pt = 2, pb = 6, common.caption("This PC") },
+			row {
+				label = "All drives",
+				path = "::thispc",
+				here = function()
 					local n = state.nav:get()
-					return if n and n.this_pc then "$selection.item" else "#00000000"
+					return n ~= nil and n.this_pc == true
 				end,
-				hover = { bg = "$hover" },
-				on_click = open_place("::thispc"),
-				ui.text { "🖥", text_size = 15, w = 18, align = "center" },
-				ui.text { "This PC" },
+				icon = ui.div { color = "$text.secondary", icons.icon("computer", 18) },
 			},
-			ui.column {
-				w_full = true,
-				pl = 12,
-				gap = 1,
-				ui.each(
-					ui.computed(places_field("drives")),
-					function(place: state.Place)
-						return item(place, { usage = true })
-					end
-				),
-			},
+			ui.each(ui.computed(places_field("drives")), function(place: state.Place)
+				return drive_row(place)
+			end),
 		},
 	}
 end

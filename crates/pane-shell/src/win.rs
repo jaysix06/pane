@@ -4,7 +4,7 @@ use std::path::Path;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx};
 use windows::Win32::UI::Input::KeyboardAndMouse::GetActiveWindow;
-use windows::Win32::UI::Shell::ShellExecuteW;
+use windows::Win32::UI::Shell::{SHEmptyRecycleBinW, ShellExecuteW};
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 use windows::core::{PCWSTR, w};
 
@@ -34,4 +34,47 @@ pub fn open_path(hwnd: HWND, path: &Path) -> bool {
     };
     // ShellExecute returns a value above 32 on success.
     result.0 as isize > 32
+}
+
+/// Runs `exe args` elevated (Windows shows its UAC prompt, owned by the
+/// window `hwnd`) and waits for it to finish. Blocks: call off the UI thread.
+/// Ok(exit code), or Err if the prompt was declined or it couldn't start.
+pub fn run_elevated_and_wait(hwnd: isize, exe: &Path, args: &str) -> Result<u32, String> {
+    use windows::Win32::System::Threading::{GetExitCodeProcess, INFINITE, WaitForSingleObject};
+    use windows::Win32::UI::Shell::{SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW, ShellExecuteExW};
+    use windows::Win32::UI::WindowsAndMessaging::SW_HIDE;
+    let file = wide(exe);
+    let params: Vec<u16> = args.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_NOCLOSEPROCESS,
+        hwnd: HWND(hwnd as *mut _),
+        lpVerb: w!("runas"),
+        lpFile: PCWSTR(file.as_ptr()),
+        lpParameters: PCWSTR(params.as_ptr()),
+        nShow: SW_HIDE.0,
+        ..Default::default()
+    };
+    // SAFETY: strings live across the call; the process handle is closed below.
+    unsafe {
+        ShellExecuteExW(&mut info).map_err(|e| {
+            if e.code().0 as u32 & 0xFFFF == 1223 { "The permission prompt was declined.".to_string() } else { e.to_string() }
+        })?;
+        if info.hProcess.is_invalid() {
+            return Err("it didn't start".into());
+        }
+        WaitForSingleObject(info.hProcess, INFINITE);
+        let mut code = 0u32;
+        let _ = GetExitCodeProcess(info.hProcess, &mut code);
+        let _ = windows::Win32::Foundation::CloseHandle(info.hProcess);
+        Ok(code)
+    }
+}
+
+/// Empties the Recycle Bin on every drive, after Windows' own confirmation.
+/// True if it was emptied (false if the person cancelled or it failed).
+pub fn empty_recycle_bin(hwnd: HWND) -> bool {
+    // SAFETY: no strings passed (None = all drives); flags 0 keep Windows'
+    // confirmation, progress and sound.
+    unsafe { SHEmptyRecycleBinW(Some(hwnd), None, 0) }.is_ok()
 }

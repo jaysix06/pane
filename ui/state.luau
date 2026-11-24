@@ -21,6 +21,7 @@ export type Nav = {
 	address: string,
 	path: string,
 	this_pc: boolean,
+	overview: boolean,
 	sort: string,
 	descending: boolean,
 	view: string,
@@ -43,6 +44,8 @@ M.status = ui.shared("status", "")
 M.places = ui.shared("places", nil :: Places?)
 M.settings = ui.shared("settings", {} :: { [string]: any })
 M.toast = ui.shared("toast", nil :: { message: string, at: number }?)
+-- The Storage Overview (crates/pane-app/src/storage.rs).
+M.storage = ui.shared("storage", nil :: any)
 
 -- UI-only state.
 M.editing_address = ui.state("editing_address", false)

@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 pane-fs.workspace = true
 pane-shell.workspace = true
+pane-scan.workspace = true
 zgx.workspace = true
 zgx-desktop.workspace = true
 zgx-script.workspace = true
