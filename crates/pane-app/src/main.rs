@@ -11,6 +11,7 @@ mod selection;
 mod service;
 mod settings;
 mod storage;
+mod thumbs;
 mod updates;
 
 use std::path::PathBuf;
@@ -173,6 +174,9 @@ fn register_actions(host: &ScriptHost, app: &AppRef, window: zgx_desktop::Window
         let page = arg.field("page").and_then(num_arg).unwrap_or(10.0) as usize;
         app::move_focus(a, by, flag(arg, "shift"), page);
     });
+    // Thumbnails: the grid's cells say which they show, as a list of names.
+    on("thumbs_show", |a, arg| a.borrow().thumbs.show(&str_list(arg)));
+    on("thumbs_hide", |a, arg| a.borrow().thumbs.hide(&str_list(arg)));
     on("jump", |a, arg| {
         if let Some(s) = str_arg(arg) {
             app::jump(a, s);
@@ -365,6 +369,13 @@ fn str_arg(v: &Value) -> Option<&str> {
     match v {
         Value::Str(s) => Some(s),
         _ => None,
+    }
+}
+
+fn str_list(v: &Value) -> Vec<&str> {
+    match v {
+        Value::List(items) => items.iter().filter_map(str_arg).collect(),
+        _ => Vec::new(),
     }
 }
 

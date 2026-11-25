@@ -502,13 +502,16 @@ local function grid_cell(i: number): Node
 				local x = r()
 				return if x and state.is_cut(x.id) then 0.45 else 1
 			end,
-			common.file_icon(function()
+			common.thumbnail(function()
+				local x = r()
+				return if x then x.thumb else ""
+			end, function()
 				local x = r()
 				return if x then x.icon else ""
 			end, function()
 				local x = r()
 				return x ~= nil and x.dir
-			end, icon, true),
+			end, icon),
 			ui.text {
 				function()
 					local x = r()
@@ -539,6 +542,23 @@ local function grid_row(r: number): Node
 			table.insert(cells, grid_cell(i))
 		end
 	end
+	-- Thumbnails are made only for rows on screen: say which this row shows,
+	-- and that it stopped showing them as it scrolls away or its items change.
+	ui.effect(function()
+		local names = {}
+		for c = 1, cols do
+			local x = state.rows:at((r - 1) * cols + c)
+			if x and x.thumb ~= "" then
+				table.insert(names, x.thumb)
+			end
+		end
+		if #names > 0 then
+			ui.invoke("thumbs_show", names)
+			ui.on_cleanup(function()
+				ui.invoke("thumbs_hide", names)
+			end)
+		end
+	end)
 	local _, th = tile_size()
 	return ui.row { h = th + 4, w_full = true, px = 8, gap = 4, table.unpack(cells) }
 end

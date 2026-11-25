@@ -70,6 +70,22 @@ function M.file_icon(icon: () -> string, dir: () -> boolean, size: number, large
 	}
 end
 
+-- A grid tile's picture: the file's thumbnail once it is made (host:t/...),
+-- its shell icon until then and for files without one.
+function M.thumbnail(thumb: () -> string, icon: () -> string, dir: () -> boolean, size: number): Node
+	return ui.image {
+		src = function()
+			local t = thumb()
+			return if t ~= "" then "host:" .. t else "host:l/" .. icon()
+		end,
+		w = size,
+		h = size,
+		fit = "contain",
+		shrink = 0,
+		fallback = M.file_icon(icon, dir, size, true),
+	}
+end
+
 -- A menu entry with a check column.
 function M.check_item(label: string, checked: () -> boolean, on_click: () -> ()): Node
 	return ui.menu_item {

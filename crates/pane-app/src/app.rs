@@ -18,6 +18,7 @@ use crate::icons::{self, Icons, Size};
 use crate::nav::{History, Location, parse_address};
 use crate::selection::{Move, Selection};
 use crate::settings::{LoadNote, Settings};
+use crate::thumbs::{self, Thumbs};
 
 pub type AppRef = Rc<RefCell<App>>;
 
@@ -95,6 +96,7 @@ pub struct App {
     next_id: u64,
     out: Out,
     icons: Icons,
+    pub thumbs: Thumbs,
     tasks: TaskSpawner,
     watcher: Option<(PathBuf, pane_fs::Watcher)>,
     watch_tx: UnboundedSender<PathBuf>,
@@ -128,6 +130,8 @@ impl App {
         };
         let (icons, icon_loop) = Icons::start(host.clone());
         tasks.spawn(icon_loop);
+        let (thumbs, thumb_loop) = Thumbs::start(host.clone());
+        tasks.spawn(thumb_loop);
         let (watch_tx, watch_rx) = unbounded();
         let home = std::env::var_os("USERPROFILE").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("C:\\"));
 
@@ -141,6 +145,7 @@ impl App {
             next_id: 2,
             out,
             icons,
+            thumbs,
             tasks: tasks.clone(),
             watcher: None,
             watch_tx,
@@ -202,6 +207,8 @@ struct RowText {
     date: String,
     size: String,
     icon: String,
+    /// The thumbnail's host image name, "" for none (see thumbs.rs).
+    thumb: String,
 }
 
 impl RowText {
@@ -214,6 +221,7 @@ impl RowText {
             ("date", Value::from(self.date.as_str())),
             ("size", Value::from(self.size.as_str())),
             ("icon", Value::from(self.icon.as_str())),
+            ("thumb", Value::from(self.thumb.as_str())),
         ])
     }
 }
@@ -369,6 +377,7 @@ fn list_location(location: &Location, opts: ListOptions) -> Result<Listing, Stri
                     date: String::new(),
                     size: if d.total > 0 { pane_fs::format_size(d.total) } else { String::new() },
                     icon: format!("p:{}", d.root.display()),
+                    thumb: String::new(),
                 });
                 roots.push(d.root);
             }
@@ -406,6 +415,7 @@ fn row_text(e: &Entry, dir: &Path, show_extensions: bool) -> RowText {
         date: pane_fs::format_modified(e.modified),
         size: if e.is_dir { String::new() } else { pane_fs::format_size(e.size) },
         icon: icons::key_for(e, dir),
+        thumb: thumbs::name_for(e, dir),
     }
 }
 

@@ -1,4 +1,5 @@
-//! File icons as RGBA pixels, from the shell (the same icons Explorer shows).
+//! File icons and thumbnails as RGBA pixels, from the shell (the same
+//! pictures Explorer shows).
 
 use std::path::Path;
 
@@ -8,7 +9,8 @@ use windows::Win32::Graphics::Gdi::{
     DeleteObject, GetDIBits, GetObjectW, HGDIOBJ,
 };
 use windows::Win32::UI::Shell::{
-    IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY,
+    IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY,
+    SIIGBF_THUMBNAILONLY,
 };
 use windows::core::PCWSTR;
 
@@ -24,15 +26,26 @@ pub struct Icon {
 /// The shell's icon for `path` at about `size` pixels. Needs COM on the
 /// calling thread ([`crate::init_com`]).
 pub fn icon_rgba(path: &Path, size: u32) -> Option<Icon> {
+    shell_image(path, size, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK)
+}
+
+/// The shell's thumbnail of `path` (a picture or video frame), fitted inside
+/// `size` by `size` pixels, keeping its shape. `None` when the file has no
+/// thumbnail (no thumbnail handler for its type, or it can't be read): the
+/// shell never falls back to the icon here. Slow (it may decode the file):
+/// call off the UI thread, with COM ([`crate::init_com`]).
+pub fn thumbnail_rgba(path: &Path, size: u32) -> Option<Icon> {
+    shell_image(path, size, SIIGBF_THUMBNAILONLY)
+}
+
+fn shell_image(path: &Path, size: u32, flags: SIIGBF) -> Option<Icon> {
     let name = wide(path);
     // SAFETY: COM calls on this thread's apartment; the bitmap is deleted below.
     unsafe {
         let factory: IShellItemImageFactory =
             SHCreateItemFromParsingName(PCWSTR(name.as_ptr()), None).ok()?;
         let side = size as i32;
-        let hbitmap = factory
-            .GetImage(SIZE { cx: side, cy: side }, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK)
-            .ok()?;
+        let hbitmap = factory.GetImage(SIZE { cx: side, cy: side }, flags).ok()?;
         let result = bitmap_pixels(hbitmap);
         let _ = DeleteObject(HGDIOBJ(hbitmap.0));
         result

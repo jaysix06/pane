@@ -11,6 +11,8 @@ export type Row = {
 	date: string,
 	size: string,
 	icon: string,
+	-- The thumbnail's host image name (pictures and videos), "" for none.
+	thumb: string,
 }
 export type Crumb = { label: string, path: string }
 export type Nav = {
