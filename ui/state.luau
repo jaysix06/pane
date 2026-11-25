@@ -48,6 +48,9 @@ M.settings = ui.shared("settings", {} :: { [string]: any })
 M.toast = ui.shared("toast", nil :: { message: string, at: number }?)
 -- The Storage Overview (crates/pane-app/src/storage.rs).
 M.storage = ui.shared("storage", nil :: any)
+-- The preview pane's content (crates/pane-app/src/preview.rs): nil while it
+-- is closed; { state = "empty" | "many" | "item", ... }.
+M.preview = ui.shared("preview", nil :: any)
 
 -- A newer release on GitHub: { version, current, name, url, notes }, or nil.
 M.update = ui.shared("update", nil :: any)
@@ -66,6 +69,8 @@ M.rename_ended_at = 0
 M.editing_address = ui.state("editing_address", false)
 M.address_text = ui.state("address_text", "")
 M.grid_cols = ui.state("grid_cols", 6)
+-- The folder view's width: details drops columns as it narrows.
+M.view_w = ui.state("view_w", 1000)
 M.list_ref = ui.ref()
 
 -- Small readers.

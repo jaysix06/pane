@@ -15,6 +15,7 @@ local paths: { [string]: string } = {
 	details = "M4 6h16M4 12h16M4 18h16M8.5 4v16",
 	list = "M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01",
 	grid = "M4.5 4.5h6v6h-6zM13.5 4.5h6v6h-6zM4.5 13.5h6v6h-6zM13.5 13.5h6v6h-6z",
+	preview = "M4 5h16v14H4zM14 5v14M16.5 9h1.5M16.5 12h1.5",
 	sort = "M7 5v14M4 16l3 3 3-3M14 7h6M14 12h4.5M14 17h3",
 	search = "M10.5 17a6.5 6.5 0 1 0 0-13 6.5 6.5 0 0 0 0 13zM15.5 15.5L20 20",
 	pin = "M9 4h6l-1 5 3 3H7l3-3-1-5zM12 15v5",

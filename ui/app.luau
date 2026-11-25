@@ -9,6 +9,7 @@ local Toolbar = require("./components/toolbar")
 local Sidebar = require("./components/sidebar")
 local Views = require("./components/views")
 local Overview = require("./components/overview")
+local Preview = require("./components/preview")
 local customize = require("./components/customize")
 local confirm = require("./components/confirm")
 local commands = require("./components/commands")
@@ -69,6 +70,8 @@ local function on_key(e): boolean
 		commands.new_folder()
 	elseif key == "Delete" then
 		commands.delete(e.shift)
+	elseif e.alt and (key == "p" or key == "P") then
+		ui.invoke("set_setting", { key = "preview_pane", value = not state.setting("preview_pane") })
 	elseif key == "F2" then
 		commands.rename()
 	elseif (ctrl and key == "l") or (e.alt and key == "d") or key == "F4" then
@@ -155,12 +158,20 @@ return ui.column {
 				inset_shadow = { x = 0, y = 1, color = "$app.highlight" },
 				overflow = "hidden",
 				relative = true,
-				ui.show(is_overview, Overview(), ui.column {
+				ui.show(is_overview, Overview(), ui.row {
 					grow = 1,
 					w_full = true,
 					min_h = 0,
-					Views(),
-					status_bar(),
+					ui.column {
+						grow = 1,
+						min_w = 0,
+						h_full = true,
+						Views(),
+						status_bar(),
+					},
+					ui.show(function()
+						return state.setting("preview_pane") == true
+					end, Preview()),
 				}),
 				OpsPanel(),
 			},

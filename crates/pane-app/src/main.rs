@@ -7,6 +7,7 @@ mod app;
 mod icons;
 mod nav;
 mod ops;
+mod preview;
 mod selection;
 mod service;
 mod settings;

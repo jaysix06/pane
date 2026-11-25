@@ -397,6 +397,19 @@ return function(): Node
 				local n = state.nav:get()
 				return not (n and n.overview)
 			end, ui.row { gap = 4, items = "center", view_switch(), sort_menu() }),
+			ui.show(function()
+				local n = state.nav:get()
+				return not (n and n.overview)
+			end, common.icon_button {
+				label = "Preview pane (Alt+P)",
+				icon = "preview",
+				on_click = function()
+					ui.invoke("set_setting", { key = "preview_pane", value = not state.setting("preview_pane") })
+				end,
+				active = function()
+					return state.setting("preview_pane") == true
+				end,
+			}),
 			more_menu(),
 		},
 	}

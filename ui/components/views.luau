@@ -38,6 +38,18 @@ local LIST_ROW = 26
 local COL_DATE = 170
 local COL_TYPE = 190
 local COL_SIZE = 110
+-- Name keeps at least this much: narrower, Type goes, then Date modified
+-- (the preview pane open in a small window). Size always stays.
+local NAME_MIN = 220
+local WITH_DATE = NAME_MIN + COL_DATE + COL_SIZE + 60
+local WITH_TYPE = WITH_DATE + COL_TYPE + 12
+
+local function column_hidden(column: string): () -> boolean
+	return function()
+		local w = state.view_w:get()
+		return if column == "type" then w < WITH_TYPE else w < WITH_DATE
+	end
+end
 
 -- What a drag carries: the paths of the selection when the row is part of
 -- it, else just the row.
@@ -260,6 +272,7 @@ end
 
 local function header_cell(label: string, key: string, width: number?, align: string?): Node
 	return ui.button {
+		hidden = if key == "date" or key == "type" then column_hidden(key) else false,
 		label = `Sort by {label}`,
 		on_click = ui.action("sort", key),
 		w = width,
@@ -362,12 +375,13 @@ local function details_row(_item: state.Row, index: State<number>, row: State<st
 			literal = true,
 			w = COL_DATE,
 			shrink = 0,
+			hidden = column_hidden("date"),
 			color = "$text.secondary",
 			font = "$font.mono",
 			text_size = 12,
 			truncate = true,
 		},
-		ui.text { field("kind"), literal = true, w = COL_TYPE, shrink = 0, color = "$text.secondary", truncate = true },
+		ui.text { field("kind"), literal = true, w = COL_TYPE, shrink = 0, hidden = column_hidden("type"), color = "$text.secondary", truncate = true },
 		ui.text {
 			field("size"),
 			literal = true,
@@ -706,6 +720,9 @@ return function(): Node
 		relative = true,
 		focusable = true,
 		label = "Items",
+		on_resize = function(size)
+			state.view_w:set(size.w)
+		end,
 		on_key = on_list_key,
 		-- Right-click on empty space: the folder's own menu (New, Paste, ...).
 		context_menu = function()

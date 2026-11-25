@@ -18,6 +18,7 @@ use crate::icons::{self, Icons, Size};
 use crate::nav::{History, Location, parse_address};
 use crate::selection::{Move, Selection};
 use crate::settings::{LoadNote, Settings};
+use crate::preview::{self, Preview};
 use crate::thumbs::{self, Thumbs};
 
 pub type AppRef = Rc<RefCell<App>>;
@@ -97,6 +98,7 @@ pub struct App {
     out: Out,
     icons: Icons,
     pub thumbs: Thumbs,
+    preview: Preview,
     tasks: TaskSpawner,
     watcher: Option<(PathBuf, pane_fs::Watcher)>,
     watch_tx: UnboundedSender<PathBuf>,
@@ -132,6 +134,8 @@ impl App {
         tasks.spawn(icon_loop);
         let (thumbs, thumb_loop) = Thumbs::start(host.clone());
         tasks.spawn(thumb_loop);
+        let (preview, preview_loop) = Preview::start(host.clone());
+        tasks.spawn(preview_loop);
         let (watch_tx, watch_rx) = unbounded();
         let home = std::env::var_os("USERPROFILE").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("C:\\"));
 
@@ -146,6 +150,7 @@ impl App {
             out,
             icons,
             thumbs,
+            preview,
             tasks: tasks.clone(),
             watcher: None,
             watch_tx,
@@ -774,6 +779,9 @@ fn settings_changed(app: &AppRef, keys: &[&str]) {
     if keys.is_empty() || keys.iter().any(|k| k.starts_with("sidebar_") || *k == "pinned") {
         refresh_places(app);
     }
+    if keys.is_empty() || keys.iter().any(|k| k.starts_with("preview_")) {
+        update_preview(app);
+    }
     schedule_save(app);
 }
 
@@ -1006,6 +1014,62 @@ fn publish_selection(app: &AppRef) {
         ("focus", Value::from(focus)),
     ]));
     a.out.status.set(Value::from(status_text(tab).as_str()));
+    drop(a);
+    update_preview(app);
+}
+
+/// Shows the selection in the preview pane, if it's open: one item, or how
+/// many are selected.
+fn update_preview(app: &AppRef) {
+    let a = app.borrow();
+    if !a.settings.preview_pane {
+        a.preview.clear();
+        return;
+    }
+    let tab = a.tab();
+    let target = match tab.selection.len() {
+        0 => preview::Target::Nothing,
+        1 => {
+            let i = tab.selection.indices().next().expect("one selected");
+            match preview_item(tab, i) {
+                // The pane shows the large icon while loading, and for files
+                // without a picture or text: the list may only have the small.
+                Some(item) => {
+                    a.icons.request(&item.icon, &item.path, Size::Large);
+                    preview::Target::Item(item)
+                }
+                None => preview::Target::Nothing,
+            }
+        }
+        n => preview::Target::Many(n),
+    };
+    a.preview.show(target, a.settings.preview_max_kb);
+}
+
+fn preview_item(tab: &Tab, i: usize) -> Option<preview::Item> {
+    let entry = tab.entries.get(i)?;
+    let path = match &tab.history.current {
+        Location::Folder(dir) => dir.join(&entry.name),
+        Location::ThisPc => tab.roots.get(i)?.clone(),
+        Location::Overview => return None,
+    };
+    let Value::List(rows) = &tab.rows else { return None };
+    let row = rows.get(i)?;
+    let text = |name: &str| match row.field(name) {
+        Some(Value::Str(s)) => s.to_string(),
+        _ => String::new(),
+    };
+    Some(preview::Item {
+        name: text("name"),
+        dir: entry.is_dir,
+        kind: text("kind"),
+        size: text("size"),
+        date: text("date"),
+        icon: text("icon"),
+        picture: !text("thumb").is_empty(),
+        modified: entry.modified,
+        path,
+    })
 }
 
 fn status_text(tab: &Tab) -> String {
