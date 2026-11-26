@@ -7,6 +7,8 @@ pub mod clipboard;
 #[cfg(windows)]
 mod context_menu;
 #[cfg(windows)]
+pub mod default_app;
+#[cfg(windows)]
 pub mod fileops;
 #[cfg(windows)]
 mod icons;
@@ -22,7 +24,7 @@ pub use icons::{Icon, icon_rgba, thumbnail_rgba};
 #[cfg(windows)]
 pub use places::{Drive, DriveKind, Place, drives, known_folders};
 #[cfg(windows)]
-pub use win::{active_window, empty_recycle_bin, init_com, open_path, run_elevated_and_wait};
+pub use win::{active_window, empty_recycle_bin, init_com, open_path, run_elevated_and_wait, windows_version};
 
 #[cfg(all(test, windows))]
 mod tests {
@@ -34,6 +36,13 @@ mod tests {
         assert!(places.iter().any(|p| p.id == "home"));
         let drives = drives();
         assert!(drives.iter().any(|d| d.root.to_string_lossy().eq_ignore_ascii_case("C:\\")));
+    }
+
+    #[test]
+    fn names_this_windows() {
+        let v = windows_version();
+        assert!(v.starts_with("Windows"), "{v}");
+        assert!(v.contains("(build "), "{v}");
     }
 
     #[test]

@@ -54,6 +54,11 @@ M.preview = ui.shared("preview", nil :: any)
 
 -- A newer release on GitHub: { version, current, name, url, notes }, or nil.
 M.update = ui.shared("update", nil :: any)
+-- The last update check: "checking", "current", "available" or "error".
+M.update_check = ui.shared("update_check", nil :: string?)
+-- The About dialog (crates/pane-app/src/about.rs): version, windows,
+-- default_fm (Pane opens folders), default_error.
+M.about = ui.shared("about", nil :: any)
 -- File operations in progress (crates/pane-app/src/ops.rs).
 M.ops = ui.shared("ops", {} :: { any })
 -- Cut items: { folder, ids }, dimmed while that folder shows.

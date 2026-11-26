@@ -300,6 +300,12 @@ pub fn uninstall(quiet: bool) -> i32 {
         }
         run_elevated(&service_exe, "uninstall");
     }
+    // If Pane is the default file manager, folders go back to File Explorer
+    // (or the file manager that had them) before pane.exe goes.
+    let pane = dir.join("pane.exe");
+    if pane.exists() {
+        let _ = std::process::Command::new(&pane).arg("--restore-file-manager").status();
+    }
     if let Some(link) = start_menu_link() {
         let _ = std::fs::remove_file(link);
     }

@@ -290,6 +290,9 @@ struct UpdateState {
 
 pub struct Updates {
     out: Shared,
+    /// The last check's outcome, for the About dialog's "Check for updates":
+    /// "checking", "current", "available" or "error".
+    checked: Shared,
     state: RefCell<UpdateState>,
     tasks: TaskSpawner,
 }
@@ -298,6 +301,7 @@ pub struct Updates {
 pub fn start(host: &ScriptHost, tasks: &TaskSpawner, app: &AppRef) -> Rc<Updates> {
     let updates = Rc::new(Updates {
         out: host.shared("update", Value::Nil),
+        checked: host.shared("update_check", Value::Nil),
         state: RefCell::new(UpdateState::default()),
         tasks: tasks.clone(),
     });
@@ -306,22 +310,26 @@ pub fn start(host: &ScriptHost, tasks: &TaskSpawner, app: &AppRef) -> Rc<Updates
         // Let the window settle first.
         zgx::timer::sleep(Duration::from_secs(3)).await;
         loop {
-            check(&u, &a);
+            check(&u, &a, false);
             zgx::timer::sleep(EVERY).await;
         }
     });
     updates
 }
 
-/// Checks now (also the "Check for updates" action).
-pub fn check(updates: &Rc<Updates>, app: &AppRef) {
-    if !app.borrow().settings.check_updates {
+/// Checks now. `manual`: the About dialog's "Check for updates", which
+/// checks even with automatic checks off and offers a version said "Later"
+/// to.
+pub fn check(updates: &Rc<Updates>, app: &AppRef, manual: bool) {
+    if !manual && !app.borrow().settings.check_updates {
         return;
     }
     // Don't disturb a download in progress or a ready update.
     if matches!(updates.state.borrow().phase, "downloading" | "ready") {
+        updates.checked.set(Value::from("available"));
         return;
     }
+    updates.checked.set(Value::from("checking"));
     let (tx, rx) = futures_channel::oneshot::channel();
     std::thread::spawn(move || {
         let found = fetch_latest().map(|r| {
@@ -344,17 +352,24 @@ pub fn check(updates: &Rc<Updates>, app: &AppRef) {
                     s.phase = "ready";
                     s.file = Some(path);
                     s.release = Some(r);
-                } else if dismissed != r.version {
+                } else if manual || dismissed != r.version {
                     s.phase = "available";
                     s.release = Some(r);
                 } else {
                     *s = UpdateState::default();
                 }
                 s.error = None;
+                u.checked.set(Value::from("available"));
             }
-            Ok(_) => *u.state.borrow_mut() = UpdateState::default(),
+            Ok(_) => {
+                *u.state.borrow_mut() = UpdateState::default();
+                u.checked.set(Value::from("current"));
+            }
             // Offline or rate-limited: try again at the next check.
-            Err(e) => eprintln!("[pane] update check: {e}"),
+            Err(e) => {
+                eprintln!("[pane] update check: {e}");
+                u.checked.set(Value::from("error"));
+            }
         }
         publish(&u);
     });

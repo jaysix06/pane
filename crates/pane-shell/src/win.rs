@@ -78,3 +78,31 @@ pub fn empty_recycle_bin(hwnd: HWND) -> bool {
     // confirmation, progress and sound.
     unsafe { SHEmptyRecycleBinW(Some(hwnd), None, 0) }.is_ok()
 }
+
+/// "Windows 11 Pro 24H2 (build 26100.4061)", for the About dialog's
+/// "Copy version info". Windows 11 still names itself 10 in the registry,
+/// so the build number decides.
+pub fn windows_version() -> String {
+    use windows::Win32::System::Registry::HKEY_LOCAL_MACHINE;
+    const KEY: &str = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion";
+    let get = |name: &str| crate::default_app::read_string(HKEY_LOCAL_MACHINE, KEY, name).unwrap_or_default();
+    let build = get("CurrentBuild");
+    let mut product = get("ProductName");
+    if build.parse::<u32>().is_ok_and(|b| b >= 22000) {
+        product = product.replacen("Windows 10", "Windows 11", 1);
+    }
+    if product.is_empty() {
+        product = "Windows".into();
+    }
+    let display = get("DisplayVersion");
+    // UBR is a number (REG_DWORD): left out rather than read separately.
+    let mut text = product;
+    if !display.is_empty() {
+        text.push(' ');
+        text.push_str(&display);
+    }
+    if !build.is_empty() {
+        text.push_str(&format!(" (build {build})"));
+    }
+    text
+}

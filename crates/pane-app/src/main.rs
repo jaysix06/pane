@@ -3,6 +3,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod about;
 mod app;
 mod icons;
 mod nav;
@@ -27,6 +28,10 @@ use crate::nav::Location;
 use crate::selection::Move;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // The uninstaller: give folders back to what had them before Pane.
+    if std::env::args_os().nth(1).is_some_and(|a| a == "--restore-file-manager") {
+        std::process::exit(about::restore_from_command_line());
+    }
     let ui_dir = ui_dir();
     let start = std::env::args_os().nth(1).map(PathBuf::from).filter(|p| p.is_dir());
 
@@ -68,7 +73,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let updates = updates::start(&host, &cx.tasks, &app);
             {
                 let (u, a) = (updates.clone(), app.clone());
-                host.action("update_check", move |_| updates::check(&u, &a));
+                host.action("update_check", move |_| updates::check(&u, &a, true));
                 let u = updates.clone();
                 host.action("update_open", move |_| updates::open(&u));
                 let u = updates.clone();
@@ -81,6 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 host.action("update_dismiss", move |_| updates::dismiss(&u, &a));
             }
             register_actions(&host, &app, cx.window.clone());
+            register_about_actions(&host);
             register_storage_actions(&host, &app, &storage, &ops);
             register_ops_actions(&host, &app, &ops);
 
@@ -231,6 +237,27 @@ fn register_actions(host: &ScriptHost, app: &AppRef, window: zgx_desktop::Window
         if let Location::Folder(p) = loc {
             app::pin(a, &p.display().to_string());
         }
+    });
+}
+
+/// The About dialog: refresh its facts, the default file manager, links.
+fn register_about_actions(host: &ScriptHost) {
+    let about = about::start(host);
+    let a = about.clone();
+    host.action("about_refresh", move |_| about::publish(&a));
+    let a = about.clone();
+    host.action("set_default_fm", move |arg| about::set_default(&a, matches!(arg, Value::Bool(true))));
+    // Only Pane's own pages: the script names one, never a URL.
+    host.action("open_link", |arg| {
+        let page = match str_arg(&arg) {
+            Some("repo") => "",
+            Some("issues") => "/issues",
+            Some("releases") => "/releases",
+            Some("license") => "/blob/main/LICENSE",
+            _ => return,
+        };
+        let url = format!("https://github.com/{}{page}", updates::REPO);
+        pane_shell::open_path(pane_shell::active_window(), std::path::Path::new(&url));
     });
 }
 

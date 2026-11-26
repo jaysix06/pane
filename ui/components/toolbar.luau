@@ -7,6 +7,7 @@ local common = require("./common")
 local icons = require("./icons")
 local customize = require("./customize")
 local commands = require("./commands")
+local about = require("./about")
 
 local function nav_flag(name: string): () -> boolean
 	return function()
@@ -356,6 +357,8 @@ local function more_menu(): Node
 				ui.invoke("remove_instant_scan")
 			end, "bolt")
 		),
+		common.separator(),
+		common.menu_item("About Pane", about.show, "info"),
 	}
 end
 
