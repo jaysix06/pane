@@ -9,12 +9,15 @@ mod icons;
 mod nav;
 mod ops;
 mod preview;
+mod search;
 mod selection;
+mod session;
 mod service;
 mod settings;
 mod storage;
 mod thumbs;
 mod updates;
+mod windows;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -87,6 +90,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             register_actions(&host, &app, cx.window.clone());
             register_about_actions(&host);
+            {
+                let (a, h) = (app.clone(), host.clone());
+                host.action("clear_caches", move |_| app::clear_caches(&a, &h));
+            }
             register_storage_actions(&host, &app, &storage, &ops);
             register_ops_actions(&host, &app, &ops);
 
@@ -94,8 +101,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 eprintln!("script error: {e}");
             }
             cx.tasks.spawn(host.watch(Duration::from_millis(250)));
+            // The Settings window (ui/settings.luau declares it).
+            let follow = windows::follow(&host, cx);
             cx.render(host.view());
             cx.on_closed(move || {
+                drop(follow);
                 app::save_now(&app);
                 host.save();
             });
@@ -184,6 +194,11 @@ fn register_actions(host: &ScriptHost, app: &AppRef, window: zgx_desktop::Window
     // Thumbnails: the grid's cells say which they show, as a list of names.
     on("thumbs_show", |a, arg| a.borrow().thumbs.show(&str_list(arg)));
     on("thumbs_hide", |a, arg| a.borrow().thumbs.hide(&str_list(arg)));
+    on("search", |a, arg| {
+        if let Some(q) = str_arg(arg) {
+            app::search(a, q);
+        }
+    });
     on("jump", |a, arg| {
         if let Some(s) = str_arg(arg) {
             app::jump(a, s);
@@ -221,6 +236,17 @@ fn register_actions(host: &ScriptHost, app: &AppRef, window: zgx_desktop::Window
         };
         let refs: Vec<&str> = keys.iter().map(String::as_str).collect();
         app::reset_settings(a, &refs);
+    });
+    on("open_settings_folder", |a, _| app::open_settings_folder(a));
+    on("export_settings", |a, arg| {
+        if let Some(p) = str_arg(arg) {
+            app::export_settings(a, std::path::Path::new(p));
+        }
+    });
+    on("import_settings", |a, arg| {
+        if let Some(p) = str_arg(arg) {
+            app::import_settings(a, std::path::Path::new(p));
+        }
     });
     on("pin", |a, arg| {
         if let Some(s) = str_arg(arg) {

@@ -12,7 +12,8 @@ local Overview = require("./components/overview")
 local Preview = require("./components/preview")
 local customize = require("./components/customize")
 local confirm = require("./components/confirm")
-local commands = require("./components/commands")
+local shortcuts = require("./shortcuts")
+local settings_window = require("./settings")
 local OpsPanel = require("./components/ops_panel")
 local update_modal = require("./components/update_modal")
 local about = require("./components/about")
@@ -45,40 +46,11 @@ local function on_key(e): boolean
 	end
 	local key = e.key
 	local ctrl = e.ctrl or e.meta
-	if e.alt and key == "ArrowLeft" then
-		ui.invoke("back")
-	elseif e.alt and key == "ArrowRight" then
-		ui.invoke("forward")
-	elseif (e.alt and key == "ArrowUp") or key == "Backspace" then
-		ui.invoke("up")
-	elseif key == "F5" or (ctrl and key == "r") then
-		ui.invoke("refresh")
-	elseif ctrl and key == "t" then
-		ui.invoke("new_tab")
-	elseif ctrl and key == "w" then
-		ui.invoke("close_tab")
-	elseif ctrl and key == "Tab" then
-		ui.invoke(if e.shift then "prev_tab" else "next_tab")
-	elseif ctrl and key == "a" then
-		ui.invoke("select_all")
-	elseif ctrl and key == "c" then
-		commands.copy()
-	elseif ctrl and key == "x" then
-		commands.cut()
-	elseif ctrl and key == "v" then
-		commands.paste()
-	elseif ctrl and e.shift and (key == "N" or key == "n") then
-		commands.new_folder()
-	elseif key == "Delete" then
-		commands.delete(e.shift)
-	elseif e.alt and (key == "p" or key == "P") then
-		ui.invoke("set_setting", { key = "preview_pane", value = not state.setting("preview_pane") })
-	elseif key == "F2" then
-		commands.rename()
-	elseif (ctrl and key == "l") or (e.alt and key == "d") or key == "F4" then
-		local n = state.nav:peek()
-		state.address_text:set(if n then n.address else "")
-		state.editing_address:set(true)
+	-- The person's keys (Settings → Keyboard shortcuts), then the fixed ones.
+	local pressed = shortcuts.key_of(e)
+	local command = if pressed then shortcuts.command_for(pressed) else nil
+	if command then
+		command.run()
 	elseif key == "Enter" then
 		if ui.now() - state.rename_ended_at < 400 then
 			return true

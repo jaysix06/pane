@@ -172,6 +172,18 @@ impl Settings {
         }
     }
 
+    /// Settings from a file's text (Settings → Advanced → Import), or
+    /// `None` if it isn't a Pane settings file.
+    pub fn from_text(text: &str) -> Option<Settings> {
+        let v = serde_json::from_str::<serde_json::Value>(text).ok()?;
+        // A JSON object that isn't Pane's would load as all defaults: refuse it.
+        v.get("version")?;
+        let mut s = serde_json::from_value::<Settings>(migrate(v)).ok()?;
+        s.version = VERSION;
+        s.sanitize();
+        Some(s)
+    }
+
     /// Writes atomically: a temporary file beside it, renamed over it.
     pub fn save(&self, path: &Path) -> io::Result<()> {
         if let Some(dir) = path.parent() {
@@ -198,6 +210,14 @@ impl Settings {
         if !map.contains_key(key) {
             return Err(format!("unknown setting `{key}`"));
         }
+        // An empty Luau table arrives as a list: for a map field (shortcuts)
+        // it means an empty map.
+        let value = match (&map[key], value) {
+            (serde_json::Value::Object(_), serde_json::Value::Array(a)) if a.is_empty() => {
+                serde_json::Value::Object(Default::default())
+            }
+            (_, v) => v,
+        };
         map.insert(key.to_string(), value);
         let mut next: Settings =
             serde_json::from_value(json).map_err(|e| format!("bad value for `{key}`: {e}"))?;
@@ -339,6 +359,16 @@ mod tests {
         assert_eq!(s.glow, 100);
         s.set_field("corners", serde_json::json!("wobbly")).unwrap();
         assert_eq!(s.corners, "soft");
+    }
+
+    #[test]
+    fn imports_only_pane_settings() {
+        let mut s = Settings::default();
+        s.show_hidden = true;
+        let text = serde_json::to_string(&s).unwrap();
+        assert_eq!(Settings::from_text(&text), Some(s));
+        assert_eq!(Settings::from_text("{\"name\": \"not pane\"}"), None);
+        assert_eq!(Settings::from_text("not json"), None);
     }
 
     #[test]

@@ -8,6 +8,7 @@ local icons = require("./icons")
 local customize = require("./customize")
 local commands = require("./commands")
 local about = require("./about")
+local shortcuts = require("../shortcuts")
 
 local function nav_flag(name: string): () -> boolean
 	return function()
@@ -178,6 +179,97 @@ local function address_input(): Node
 			end
 			return false
 		end,
+	}
+end
+
+-- Search this folder and its subfolders (Ctrl+F): Enter searches, Escape
+-- clears and goes back to the folder.
+local function search_box(): Node
+	-- Show the query of the results on screen; empty in a folder.
+	ui.effect(function()
+		local n = state.nav:get()
+		state.search_text:set(if n and n.search then n.search else "")
+	end)
+	local focused = ui.state("search_focused", false)
+	return ui.row {
+		w = 220,
+		shrink = 0,
+		h = 34,
+		pl = 10,
+		pr = 4,
+		gap = 6,
+		items = "center",
+		rounded = "$radius.md",
+		bg = "$surface.sunken",
+		border = 1,
+		border_color = function()
+			local n = state.nav:get()
+			return if focused:get() or (n and n.search) then "$accent" else "$border.subtle"
+		end,
+		color = "$text.tertiary",
+		icons.icon("search", 14),
+		ui.input {
+			ref = state.search_ref,
+			value = state.search_text,
+			label = "Search this folder",
+			placeholder = function()
+				local n = state.nav:get()
+				if n and n.crumbs and #n.crumbs > 0 and not n.search then
+					return `Search {n.crumbs[#n.crumbs].label}`
+				end
+				return "Search"
+			end,
+			select_on_focus = true,
+			grow = 1,
+			min_w = 0,
+			h = 30,
+			px = 2,
+			bg = "#00000000",
+			text_size = 13,
+			caret_color = "$accent",
+			on_focus = function()
+				focused:set(true)
+			end,
+			on_blur = function()
+				focused:set(false)
+			end,
+			on_key = function(e)
+				if e.key == "Enter" then
+					ui.invoke("search", state.search_text:peek())
+					return true
+				elseif e.key == "Escape" then
+					state.search_text:set("")
+					local n = state.nav:peek()
+					if n and n.search then
+						ui.invoke("search", "")
+					end
+					return true
+				end
+				return false
+			end,
+		},
+		ui.show(function()
+			return state.search_text:get() ~= ""
+		end, ui.button {
+			label = "Clear search",
+			on_click = function()
+				state.search_text:set("")
+				local n = state.nav:peek()
+				if n and n.search then
+					ui.invoke("search", "")
+				end
+			end,
+			w = 24,
+			h = 24,
+			p = 0,
+			rounded = "$radius.sm",
+			bg = "#00000000",
+			color = "$text.tertiary",
+			hover = { bg = "$hover", color = "$text.primary" },
+			items = "center",
+			justify = "center",
+			icons.icon("close", 12),
+		}),
 	}
 end
 
@@ -358,6 +450,9 @@ local function more_menu(): Node
 			end, "bolt")
 		),
 		common.separator(),
+		common.menu_item("Settings (Ctrl+,)", function()
+			shortcuts.open_settings()
+		end, "settings"),
 		common.menu_item("About Pane", about.show, "info"),
 	}
 end
@@ -391,6 +486,10 @@ return function(): Node
 			common.icon_button { label = "Refresh (F5)", icon = "refresh", on_click = ui.action("refresh") },
 			ui.div { w = 4 },
 			path_pill(),
+			ui.show(function()
+				local n = state.nav:get()
+				return n ~= nil and not n.overview and not n.this_pc
+			end, search_box()),
 			ui.div { w = 4 },
 			ui.show(function()
 				local n = state.nav:get()

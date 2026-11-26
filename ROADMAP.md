@@ -14,18 +14,24 @@ Where Pane is and what comes next. Latest release: **0.1.3** (thumbnails, previe
 
 ## Next: Milestone 5, Settings, About, search and session
 
-- [ ] Settings window in the Windows 11 Settings style, with a search box and "Reset this page":
-  - [ ] General: start folder, restore last session, open folders in a new tab, single or double click, language
-  - [ ] Appearance: reuses the customizer
-  - [ ] Files & folders: hidden and system files, extensions, folders first, checkboxes, delete confirmation, Recycle Bin or permanent, natural sort
-  - [ ] Sidebar: show or hide sections, reorder pins
-  - [ ] Thumbnails & preview: on / off, network drives, preview pane by default, text preview size limit
-  - [ ] Search: hidden files, case sensitivity, whole name, maximum depth
-  - [ ] Keyboard shortcuts: searchable list, rebinding with conflict warnings
-  - [ ] Advanced: thumbnail threads, clear caches, settings folder, export / import, log file, reset everything
+- [x] Settings window in the Windows 11 Settings style (Ctrl+,), with a search box and "Reset this page":
+  - [x] General: start folder, restore last session, open folders in a new tab, single or double click, open folders in Pane
+  - [x] Appearance: reuses the customizer, plus layout for new tabs and grid icon size
+  - [x] Files & folders: hidden and system files, extensions, folders first, delete confirmation, Recycle Bin or permanent, natural sort
+  - [x] Sidebar: show or hide sections, reorder and unpin pins
+  - [x] Thumbnails & preview: on / off, network drives, preview pane, text preview size limit
+  - [x] Search: hidden files, case sensitivity, whole name, maximum depth
+  - [x] Keyboard shortcuts: rebinding with conflict warnings
+  - [x] Advanced: thumbnail threads, automatic update checks, clear caches, settings folder, export / import, reset everything
 - [x] About page: version, "Copy version info", open-source licenses, links, "Check for updates" button
-- [ ] Search of the current folder, streaming results into a tab, cancellable
-- [ ] Reopen your tabs and window position on launch
+- [x] Search of the current folder (Ctrl+F), streaming results into the tab, cancellable, `*` and `?` wildcards
+- [x] Reopen your tabs on launch (window position was already kept)
+
+Left for later from Milestone 5:
+
+- [ ] Item checkboxes (the setting exists; the file views don't draw them yet)
+- [ ] Language choice (Pane is English only for now)
+- [ ] A log file (Pane's messages go nowhere in a release build)
 
 ## Milestone 4 follow-ups
 

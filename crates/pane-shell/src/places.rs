@@ -71,6 +71,21 @@ fn known_folder(id: &GUID) -> Option<PathBuf> {
 }
 
 /// The drives, A: to Z:. Network drives can be slow: call off the UI thread.
+/// Whether `path` is on a network share or a mapped network drive (where
+/// reading files for thumbnails is slow and costs the network).
+pub fn is_network_path(path: &std::path::Path) -> bool {
+    let text = path.display().to_string();
+    if text.starts_with("\\\\") {
+        return true;
+    }
+    let Some(letter) = text.chars().next().filter(|c| c.is_ascii_alphabetic() && text[1..].starts_with(':')) else {
+        return false;
+    };
+    let root: Vec<u16> = format!("{letter}:\\").encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: `root` is NUL-terminated and outlives the call.
+    unsafe { GetDriveTypeW(PCWSTR(root.as_ptr())) == 4 }
+}
+
 pub fn drives() -> Vec<Drive> {
     // SAFETY: no arguments.
     let mask = unsafe { GetLogicalDrives() };

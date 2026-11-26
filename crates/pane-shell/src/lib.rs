@@ -22,7 +22,7 @@ pub use context_menu::{MenuOutcome, show_background_menu, show_context_menu};
 #[cfg(windows)]
 pub use icons::{Icon, icon_rgba, thumbnail_rgba};
 #[cfg(windows)]
-pub use places::{Drive, DriveKind, Place, drives, known_folders};
+pub use places::{Drive, DriveKind, Place, drives, is_network_path, known_folders};
 #[cfg(windows)]
 pub use win::{active_window, empty_recycle_bin, init_com, open_path, run_elevated_and_wait, windows_version};
 

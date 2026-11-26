@@ -29,6 +29,8 @@ export type Nav = {
 	view: string,
 	loading: boolean,
 	error: string?,
+	-- Search results: the query (path is the folder searched).
+	search: string?,
 }
 export type Tab = { id: number, title: string, path: string, loading: boolean }
 export type Place = { label: string, path: string, icon: string, id: string?, used: number?, detail: string?, pinned: boolean? }
@@ -73,6 +75,9 @@ M.renaming = ui.state("renaming", nil :: string?)
 M.rename_ended_at = 0
 M.editing_address = ui.state("editing_address", false)
 M.address_text = ui.state("address_text", "")
+-- The search box's text, and its element (Ctrl+F focuses it).
+M.search_text = ui.state("search_text", "")
+M.search_ref = ui.ref()
 M.grid_cols = ui.state("grid_cols", 6)
 -- The folder view's width: details drops columns as it narrows.
 M.view_w = ui.state("view_w", 1000)

@@ -5,6 +5,8 @@ use std::path::{Component, Path, PathBuf};
 
 pub const THIS_PC: &str = "::thispc";
 pub const OVERVIEW: &str = "::overview";
+/// "::search|<root>|<query>" (a path never holds "|").
+const SEARCH: &str = "::search|";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Location {
@@ -13,6 +15,8 @@ pub enum Location {
     /// The drives, as Explorer's "This PC".
     ThisPc,
     Folder(PathBuf),
+    /// Search results: what's under `root` whose name matches `query`.
+    Search { root: PathBuf, query: String },
 }
 
 impl Location {
@@ -21,7 +25,10 @@ impl Location {
         match s {
             THIS_PC => Location::ThisPc,
             OVERVIEW => Location::Overview,
-            _ => Location::Folder(PathBuf::from(s)),
+            _ => match s.strip_prefix(SEARCH).and_then(|rest| rest.split_once('|')) {
+                Some((root, query)) => Location::Search { root: PathBuf::from(root), query: query.into() },
+                None => Location::Folder(PathBuf::from(s)),
+            },
         }
     }
 
@@ -31,6 +38,15 @@ impl Location {
             Location::ThisPc => THIS_PC.into(),
             Location::Overview => OVERVIEW.into(),
             Location::Folder(p) => p.display().to_string(),
+            Location::Search { root, query } => format!("{SEARCH}{}|{query}", root.display()),
+        }
+    }
+
+    /// The folder this location shows or searches.
+    pub fn folder(&self) -> Option<&Path> {
+        match self {
+            Location::Folder(p) | Location::Search { root: p, .. } => Some(p),
+            Location::ThisPc | Location::Overview => None,
         }
     }
 
@@ -44,6 +60,7 @@ impl Location {
                 Some(name) => name.to_string_lossy().into_owned(),
                 None => p.display().to_string().trim_end_matches('\\').to_string(),
             },
+            Location::Search { query, .. } => format!("Search: {query}"),
         }
     }
 
@@ -52,7 +69,7 @@ impl Location {
         match self {
             Location::ThisPc => "This PC".into(),
             Location::Overview => "Overview".into(),
-            Location::Folder(p) => p.display().to_string(),
+            Location::Folder(p) | Location::Search { root: p, .. } => p.display().to_string(),
         }
     }
 
@@ -60,6 +77,8 @@ impl Location {
     pub fn parent(&self) -> Option<Location> {
         match self {
             Location::ThisPc | Location::Overview => None,
+            // Up from search results: the folder searched.
+            Location::Search { root, .. } => Some(Location::Folder(root.clone())),
             Location::Folder(p) => Some(match p.parent() {
                 Some(parent) => Location::Folder(parent.to_path_buf()),
                 None => Location::ThisPc,
@@ -73,7 +92,15 @@ impl Location {
             return vec![("Overview".to_string(), Location::Overview)];
         }
         let mut out = vec![("This PC".to_string(), Location::ThisPc)];
-        let Location::Folder(path) = self else { return out };
+        let path = match self {
+            Location::Folder(p) => p,
+            Location::Search { root, query } => {
+                let mut crumbs = Location::Folder(root.clone()).crumbs();
+                crumbs.push((format!("Search “{query}”"), self.clone()));
+                return crumbs;
+            }
+            _ => return out,
+        };
         let mut acc = PathBuf::new();
         for comp in path.components() {
             acc.push(comp.as_os_str());
@@ -274,6 +301,18 @@ mod tests {
         assert_eq!(Location::Overview.title(), "Overview");
         assert_eq!(Location::from_ui(OVERVIEW), Location::Overview);
         assert_eq!(Location::Overview.crumbs().len(), 1);
+    }
+
+    #[test]
+    fn searches_round_trip_and_go_up_to_their_folder() {
+        let s = Location::Search { root: PathBuf::from(r"C:\Work"), query: "a|b *.rs".into() };
+        assert_eq!(Location::from_ui(&s.to_ui()), s);
+        assert_eq!(s.parent(), Some(folder(r"C:\Work")));
+        assert_eq!(s.folder(), Some(Path::new(r"C:\Work")));
+        assert_eq!(s.title(), "Search: a|b *.rs");
+        let crumbs = s.crumbs();
+        assert_eq!(crumbs.last().unwrap().1, s);
+        assert_eq!(crumbs[crumbs.len() - 2].1, folder(r"C:\Work"));
     }
 
     #[test]

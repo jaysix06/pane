@@ -270,10 +270,10 @@ end
 
 -- Details ------------------------------------------------------------------
 
-local function header_cell(label: string, key: string, width: number?, align: string?): Node
+local function header_cell(label: string | () -> string, key: string, width: number?, align: string?): Node
 	return ui.button {
 		hidden = if key == "date" or key == "type" then column_hidden(key) else false,
-		label = `Sort by {label}`,
+		label = if type(label) == "string" then `Sort by {label}` else "Sort by type",
 		on_click = ui.action("sort", key),
 		w = width,
 		grow = if width then 0 else 1,
@@ -288,7 +288,9 @@ local function header_cell(label: string, key: string, width: number?, align: st
 		items = "center",
 		gap = 4,
 		ui.text {
-			string.upper(label),
+			function()
+				return string.upper(if type(label) == "function" then label() else label)
+			end,
 			font = "$font.mono",
 			text_size = 10.5,
 			letter_spacing = 1,
@@ -320,7 +322,11 @@ local function details_header(): Node
 		border_color = "$border.subtle",
 		header_cell("Name", "name"),
 		header_cell("Date modified", "date", COL_DATE),
-		header_cell("Type", "type", COL_TYPE),
+		-- Search results show where each one is instead.
+		header_cell(function()
+			local n = state.nav:get()
+			return if n and n.search then "Folder" else "Type"
+		end, "type", COL_TYPE),
 		header_cell("Size", "size", COL_SIZE, "end"),
 	}
 end
@@ -549,12 +555,15 @@ end
 
 local function grid_row(r: number): Node
 	local cols = state.grid_cols:peek()
+	-- Every column gets a cell, shown while its item exists: a row kept as
+	-- the list changes (search results streaming in, a folder growing or
+	-- shrinking) fills and empties without being built again.
 	local cells = {}
 	for c = 1, cols do
 		local i = (r - 1) * cols + c
-		if i <= state.rows:len() then
-			table.insert(cells, grid_cell(i))
-		end
+		table.insert(cells, ui.show(function()
+			return i <= state.rows:len()
+		end, grid_cell(i)))
 	end
 	-- Thumbnails are made only for rows on screen: say which this row shows,
 	-- and that it stopped showing them as it scrolls away or its items change.
@@ -687,7 +696,10 @@ local function empty_or_error(): Node
 				if n and n.loading then
 					return ""
 				end
-				return if state.rows:len() == 0 then "This folder is empty." else ""
+				if state.rows:len() > 0 then
+					return ""
+				end
+				return if n and n.search then `Nothing here matches “{n.search}”.` else "This folder is empty."
 			end,
 			color = "$text.secondary",
 			wrap = true,

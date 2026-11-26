@@ -28,7 +28,6 @@ use pane_fs::Entry;
 const PIXELS: u32 = 256;
 /// Bytes of published thumbnails kept (a 256 px square is 256 KiB).
 const BUDGET: usize = 96 << 20;
-const WORKERS: usize = 3;
 
 /// Types the shell makes thumbnails of on a stock Windows (pictures,
 /// camera raw files, videos). Others keep their icon without asking.
@@ -88,12 +87,13 @@ pub struct Thumbs {
 }
 
 impl Thumbs {
-    /// Starts the workers. Spawn the returned future on the window's tasks:
-    /// it publishes thumbnails to `host` as they arrive.
-    pub fn start(host: ScriptHost) -> (Thumbs, impl Future<Output = ()>) {
+    /// Starts `workers` threads (Settings → Advanced, from the next launch).
+    /// Spawn the returned future on the window's tasks: it publishes
+    /// thumbnails to `host` as they arrive.
+    pub fn start(host: ScriptHost, workers: usize) -> (Thumbs, impl Future<Output = ()>) {
         let queue = Arc::new((Mutex::new(Queue::default()), Condvar::new()));
         let (done_tx, done_rx) = unbounded::<Done>();
-        for n in 0..WORKERS {
+        for n in 0..workers.max(1) {
             let (queue, done_tx) = (queue.clone(), done_tx.clone());
             std::thread::Builder::new()
                 .name(format!("pane-thumbs-{n}"))
@@ -138,6 +138,22 @@ impl Thumbs {
         }
         drop(q);
         wake.notify_all();
+    }
+
+    /// Drops every thumbnail made so far (Settings → Advanced → Clear
+    /// caches): what's on screen is made again.
+    pub fn clear(&self, host: &ScriptHost) {
+        let mut local = self.local.borrow_mut();
+        for (name, _) in local.published.drain(..) {
+            host.image(&name, None);
+        }
+        local.bytes = 0;
+        local.failed.clear();
+        let visible: Vec<String> = local.visible.keys().cloned().collect();
+        local.visible.clear();
+        drop(local);
+        let names: Vec<&str> = visible.iter().map(String::as_str).collect();
+        self.show(&names);
     }
 
     /// The grid stopped showing `names`.

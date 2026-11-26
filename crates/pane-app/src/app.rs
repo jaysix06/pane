@@ -17,8 +17,10 @@ use zgx_script::{ScriptHost, Shared, Value};
 use crate::icons::{self, Icons, Size};
 use crate::nav::{History, Location, parse_address};
 use crate::selection::{Move, Selection};
+use crate::session::{SavedTab, Session};
 use crate::settings::{LoadNote, Settings};
 use crate::preview::{self, Preview};
+use crate::search;
 use crate::thumbs::{self, Thumbs};
 
 pub type AppRef = Rc<RefCell<App>>;
@@ -41,6 +43,15 @@ pub struct Tab {
     pub loading: bool,
     /// A name to select once the next listing has it (a new or renamed item).
     pub pending_select: Option<String>,
+    /// The search running for this tab, cancelled when it's replaced or the
+    /// tab closes.
+    pub search: Option<search::Cancel>,
+}
+
+impl Drop for Tab {
+    fn drop(&mut self) {
+        self.cancel_search();
+    }
 }
 
 impl Tab {
@@ -59,6 +70,13 @@ impl Tab {
             error: None,
             loading: false,
             pending_select: None,
+            search: None,
+        }
+    }
+
+    fn cancel_search(&mut self) {
+        if let Some(cancel) = self.search.take() {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
         }
     }
 
@@ -67,7 +85,10 @@ impl Tab {
         match &self.history.current {
             Location::ThisPc => self.roots.get(i).cloned(),
             Location::Overview => None,
-            Location::Folder(dir) => self.entries.get(i).map(|e| dir.join(&e.name)),
+            // A search result's name is its path below the folder searched.
+            Location::Folder(dir) | Location::Search { root: dir, .. } => {
+                self.entries.get(i).map(|e| dir.join(&e.name))
+            }
         }
     }
 
@@ -103,6 +124,8 @@ pub struct App {
     watcher: Option<(PathBuf, pane_fs::Watcher)>,
     watch_tx: UnboundedSender<PathBuf>,
     save_pending: bool,
+    session_path: PathBuf,
+    session_pending: bool,
     pub home: PathBuf,
 }
 
@@ -132,21 +155,49 @@ impl App {
         };
         let (icons, icon_loop) = Icons::start(host.clone());
         tasks.spawn(icon_loop);
-        let (thumbs, thumb_loop) = Thumbs::start(host.clone());
+        let (thumbs, thumb_loop) = Thumbs::start(host.clone(), settings.thumbnail_threads as usize);
         tasks.spawn(thumb_loop);
         let (preview, preview_loop) = Preview::start(host.clone());
         tasks.spawn(preview_loop);
         let (watch_tx, watch_rx) = unbounded();
         let home = std::env::var_os("USERPROFILE").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("C:\\"));
 
+        let session_path = Session::path(&settings_path);
+        // The tabs left open last time, unless Pane was asked to open a
+        // folder (a folder opened with it, Win+E with a start folder).
+        let restored = match &start {
+            None if settings.restore_session => {
+                Session::load(&session_path).and_then(|s| s.usable(|p| p.is_dir()))
+            }
+            _ => None,
+        };
         let first = start.map(Location::Folder).unwrap_or_else(|| start_location(&settings, &home));
         let view = settings.default_view.clone();
+        let (tabs, active) = match restored {
+            Some(s) => {
+                let tabs: Vec<Tab> = s
+                    .tabs
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| {
+                        let mut tab = Tab::new(i as u64 + 1, Location::from_ui(&t.location), &t.view);
+                        tab.sort = sort_key(&t.sort);
+                        tab.descending = t.descending;
+                        tab
+                    })
+                    .collect();
+                let active = s.active.min(tabs.len() - 1);
+                (tabs, active)
+            }
+            None => (vec![Tab::new(1, first, &view)], 0),
+        };
+        let next_id = tabs.len() as u64 + 1;
         let app = Rc::new(RefCell::new(App {
-            tabs: vec![Tab::new(1, first, &view)],
-            active: 0,
+            tabs,
+            active,
             settings,
             settings_path,
-            next_id: 2,
+            next_id,
             out,
             icons,
             thumbs,
@@ -155,6 +206,8 @@ impl App {
             watcher: None,
             watch_tx,
             save_pending: false,
+            session_path,
+            session_pending: false,
             home,
         }));
         if let LoadNote::Recovered(backup) = note {
@@ -166,8 +219,30 @@ impl App {
         tasks.spawn(watch_loop(app.clone(), watch_rx));
         tasks.spawn(places_loop(app.clone()));
         publish_tabs(&app);
-        load(&app, 0, false);
+        load(&app, active, false);
         app
+    }
+
+    /// The open tabs, to reopen next time. Search results reopen as the
+    /// folder searched.
+    fn session(&self) -> Session {
+        let tabs = self
+            .tabs
+            .iter()
+            .map(|t| {
+                let location = match &t.history.current {
+                    Location::Search { root, .. } => Location::Folder(root.clone()),
+                    other => other.clone(),
+                };
+                SavedTab {
+                    location: location.to_ui(),
+                    view: t.view.clone(),
+                    sort: sort_name(t.sort).into(),
+                    descending: t.descending,
+                }
+            })
+            .collect();
+        Session { tabs, active: self.active }
     }
 
     pub fn tab(&self) -> &Tab {
@@ -238,6 +313,9 @@ struct ListOptions {
     show_hidden: bool,
     show_system: bool,
     show_extensions: bool,
+    /// Thumbnails for pictures and videos here (Settings: on, and on
+    /// network drives too or not).
+    thumbnails: bool,
 }
 
 /// (Re)lists tab `index`'s location in the background. With
@@ -251,8 +329,12 @@ pub fn load(app: &AppRef, index: usize, keep_selection: bool) {
             show_hidden: a.settings.show_hidden,
             show_system: a.settings.show_system,
             show_extensions: a.settings.show_extensions,
+            thumbnails: a.settings.thumbnails
+                && (a.settings.thumbnails_network
+                    || !a.tabs[index].history.current.folder().is_some_and(pane_shell::is_network_path)),
         };
         let tab = &mut a.tabs[index];
+        tab.cancel_search();
         tab.generation += 1;
         tab.loading = true;
         if !keep_selection {
@@ -265,6 +347,11 @@ pub fn load(app: &AppRef, index: usize, keep_selection: bool) {
         ensure_watch(app);
     }
     publish_tabs(app);
+
+    if let Location::Search { root, query } = &location {
+        start_search(app, index, generation, tab_id, root.clone(), query.clone(), opts);
+        return;
+    }
 
     let (tx, rx) = futures_channel::oneshot::channel();
     let worker_location = location.clone();
@@ -309,10 +396,7 @@ pub fn load(app: &AppRef, index: usize, keep_selection: bool) {
                     // Icons for what is shown, at the size the view needs.
                     let keys: Vec<String> = listing.texts.into_iter().map(|t| t.icon).collect();
                     let size = icon_size(&tab.view);
-                    let folder = match &location {
-                        Location::Folder(p) => Some(p.clone()),
-                        Location::ThisPc | Location::Overview => None,
-                    };
+                    let folder = location.folder().map(Path::to_path_buf);
                     match folder {
                         Some(f) => a.icons.request_entries(&f, &a.tabs[index].entries, &keys, size),
                         None => {
@@ -353,7 +437,11 @@ fn list_location(location: &Location, opts: ListOptions) -> Result<Listing, Stri
     let started = Instant::now();
     match location {
         // The Overview has no listing: storage.rs publishes its contents.
-        Location::Overview => Ok(Listing { entries: Vec::new(), roots: Vec::new(), texts: Vec::new(), took: started.elapsed() }),
+        // The Overview has no listing (storage.rs publishes it); a search
+        // streams its own (start_search).
+        Location::Overview | Location::Search { .. } => {
+            Ok(Listing { entries: Vec::new(), roots: Vec::new(), texts: Vec::new(), took: started.elapsed() })
+        }
         Location::ThisPc => {
             let drives = pane_shell::drives();
             let mut entries = Vec::new();
@@ -392,14 +480,20 @@ fn list_location(location: &Location, opts: ListOptions) -> Result<Listing, Stri
             let mut entries = pane_fs::list_dir(dir).map_err(|e| friendly_error(dir, &e))?;
             entries.retain(|e| (opts.show_hidden || !e.hidden) && (opts.show_system || !(e.system && e.hidden)));
             pane_fs::sort_entries(&mut entries, opts.sort);
-            let texts = entries.iter().map(|e| row_text(e, dir, opts.show_extensions)).collect();
+            let texts = entries.iter().map(|e| row_text(e, dir, &opts, false)).collect();
             Ok(Listing { entries, roots: Vec::new(), texts, took: started.elapsed() })
         }
     }
 }
 
-fn row_text(e: &Entry, dir: &Path, show_extensions: bool) -> RowText {
+/// A row's texts. `search`: the entry's name is a path below `dir`; the row
+/// shows the file's own name, and where it is in place of its type.
+fn row_text(e: &Entry, dir: &Path, opts: &ListOptions, search: bool) -> RowText {
     let ext = e.extension();
+    let (shown, parent) = match e.name.rsplit_once('\\') {
+        Some((parent, name)) if search => (name, parent),
+        _ => (e.name.as_str(), ""),
+    };
     let kind = if e.is_dir {
         "File folder".to_string()
     } else if ext.is_empty() {
@@ -407,10 +501,16 @@ fn row_text(e: &Entry, dir: &Path, show_extensions: bool) -> RowText {
     } else {
         format!("{} File", ext.to_ascii_uppercase())
     };
-    let name = if !show_extensions && !e.is_dir && !ext.is_empty() {
-        e.name[..e.name.len() - ext.len() - 1].to_string()
+    let name = if !opts.show_extensions && !e.is_dir && !ext.is_empty() {
+        shown[..shown.len() - ext.len() - 1].to_string()
     } else {
-        e.name.clone()
+        shown.to_string()
+    };
+    let kind = if search {
+        let top = Location::Folder(dir.to_path_buf()).title();
+        if parent.is_empty() { top } else { format!("{top}\\{parent}") }
+    } else {
+        kind
     };
     RowText {
         id: e.name.clone(),
@@ -420,7 +520,7 @@ fn row_text(e: &Entry, dir: &Path, show_extensions: bool) -> RowText {
         date: pane_fs::format_modified(e.modified),
         size: if e.is_dir { String::new() } else { pane_fs::format_size(e.size) },
         icon: icons::key_for(e, dir),
-        thumb: thumbs::name_for(e, dir),
+        thumb: if opts.thumbnails { thumbs::name_for(e, dir) } else { String::new() },
     }
 }
 
@@ -633,12 +733,20 @@ pub fn cycle_tab(app: &AppRef, by: isize) {
     switch_tab(app, i);
 }
 
-/// Shows the active tab's cached state at once.
+/// Shows the active tab's cached state at once, listing it if it never was
+/// (a tab reopened from last session, shown for the first time).
 fn show_active(app: &AppRef) {
     publish_tabs(app);
     publish_rows(app);
     publish_nav(app);
     ensure_watch(app);
+    let (never_listed, i) = {
+        let a = app.borrow();
+        (a.tab().generation == 0, a.active)
+    };
+    if never_listed {
+        load(app, i, false);
+    }
 }
 
 // ---------------------------------------------------------------- selection
@@ -731,7 +839,7 @@ pub fn set_view(app: &AppRef, view: &str) {
         let a = app.borrow();
         let tab = a.tab();
         match &tab.history.current {
-            Location::Folder(dir) => {
+            Location::Folder(dir) | Location::Search { root: dir, .. } => {
                 let keys: Vec<String> = tab.entries.iter().map(|e| icons::key_for(e, dir)).collect();
                 a.icons.request_entries(dir, &tab.entries, &keys, Size::Large);
             }
@@ -768,8 +876,15 @@ fn settings_changed(app: &AppRef, keys: &[&str]) {
         a.out.settings.set(json_to_value(&a.settings.to_json()));
     }
     // Settings that change what a listing shows: list again.
-    const RELIST: &[&str] =
-        &["show_hidden", "show_system", "show_extensions", "folders_first", "natural_sort"];
+    const RELIST: &[&str] = &[
+        "show_hidden",
+        "show_system",
+        "show_extensions",
+        "folders_first",
+        "natural_sort",
+        "thumbnails",
+        "thumbnails_network",
+    ];
     if keys.is_empty() || keys.iter().any(|k| RELIST.contains(k)) {
         let n = app.borrow().tabs.len();
         for i in 0..n {
@@ -802,10 +917,82 @@ fn schedule_save(app: &AppRef) {
     });
 }
 
+/// Settings → Advanced → Clear caches: thumbnails are made again.
+pub fn clear_caches(app: &AppRef, host: &ScriptHost) {
+    app.borrow().thumbs.clear(host);
+    app.borrow().toast("Caches cleared.");
+}
+
+/// Settings → Advanced: the folder with settings.json and session.json.
+pub fn open_settings_folder(app: &AppRef) {
+    let a = app.borrow();
+    if let Some(dir) = a.settings_path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+        pane_shell::open_path(pane_shell::active_window(), dir);
+    }
+}
+
+/// Settings → Advanced → Export: the settings, to a file the person chose.
+pub fn export_settings(app: &AppRef, path: &Path) {
+    let a = app.borrow();
+    match a.settings.save(path) {
+        Ok(()) => a.toast(&format!("Settings exported to {}.", path.display())),
+        Err(e) => a.toast(&format!("Couldn't export settings: {e}")),
+    }
+}
+
+/// Settings → Advanced → Import: settings from a file exported before.
+pub fn import_settings(app: &AppRef, path: &Path) {
+    let loaded = std::fs::read_to_string(path).ok().and_then(|t| Settings::from_text(&t));
+    match loaded {
+        Some(s) => {
+            app.borrow_mut().settings = s;
+            settings_changed(app, &[]);
+            app.borrow().toast("Settings imported.");
+        }
+        None => app.borrow().toast(&format!("{} isn't a Pane settings file.", path.display())),
+    }
+}
+
 /// Saves now (the window is closing).
 pub fn save_now(app: &AppRef) {
     let a = app.borrow();
     let _ = a.settings.save(&a.settings_path);
+    let _ = a.session().save(&a.session_path);
+}
+
+/// Saves the open tabs a second after they last changed, so a crash or a
+/// power cut still reopens them.
+fn schedule_session_save(app: &AppRef) {
+    if std::mem::replace(&mut app.borrow_mut().session_pending, true) {
+        return;
+    }
+    let app2 = app.clone();
+    let tasks = app.borrow().tasks.clone();
+    tasks.spawn(async move {
+        zgx::timer::sleep(Duration::from_secs(1)).await;
+        let mut a = app2.borrow_mut();
+        a.session_pending = false;
+        let _ = a.session().save(&a.session_path);
+    });
+}
+
+fn sort_name(key: SortKey) -> &'static str {
+    match key {
+        SortKey::Name => "name",
+        SortKey::Modified => "date",
+        SortKey::Type => "type",
+        SortKey::Size => "size",
+    }
+}
+
+fn sort_key(name: &str) -> SortKey {
+    match name {
+        "date" => SortKey::Modified,
+        "type" => SortKey::Type,
+        "size" => SortKey::Size,
+        _ => SortKey::Name,
+    }
 }
 
 pub fn pin(app: &AppRef, path: &str) {
@@ -829,7 +1016,7 @@ fn ensure_watch(app: &AppRef) {
     let mut a = app.borrow_mut();
     let wanted = match &a.tab().history.current {
         Location::Folder(p) => Some(p.clone()),
-        Location::ThisPc | Location::Overview => None,
+        Location::ThisPc | Location::Overview | Location::Search { .. } => None,
     };
     if a.watcher.as_ref().map(|(p, _)| p) == wanted.as_ref() {
         return;
@@ -953,6 +1140,8 @@ fn publish_tabs(app: &AppRef) {
         .collect();
     a.out.tabs.set(Value::List(Rc::from(tabs)));
     a.out.active.set(Value::from((a.active + 1) as f64));
+    drop(a);
+    schedule_session_save(app);
 }
 
 fn publish_rows(app: &AppRef) {
@@ -974,12 +1163,7 @@ fn publish_nav(app: &AppRef) {
             Value::record([("label", Value::from(label.as_str())), ("path", Value::from(loc.to_ui().as_str()))])
         })
         .collect();
-    let sort = match tab.sort {
-        SortKey::Name => "name",
-        SortKey::Modified => "date",
-        SortKey::Type => "type",
-        SortKey::Size => "size",
-    };
+    let sort = sort_name(tab.sort);
     let location = &tab.history.current;
     a.out.nav.set(Value::record([
         ("can_back", Value::from(tab.history.can_back())),
@@ -987,7 +1171,24 @@ fn publish_nav(app: &AppRef) {
         ("can_up", Value::from(location.parent().is_some())),
         ("crumbs", Value::List(Rc::from(crumbs))),
         ("address", Value::from(location.address().as_str())),
-        ("path", Value::from(location.to_ui().as_str())),
+        // A search's folder: rows' ids are paths below it.
+        (
+            "path",
+            Value::from(
+                match location {
+                    Location::Search { root, .. } => root.display().to_string(),
+                    _ => location.to_ui(),
+                }
+                .as_str(),
+            ),
+        ),
+        (
+            "search",
+            match location {
+                Location::Search { query, .. } => Value::from(query.as_str()),
+                _ => Value::Nil,
+            },
+        ),
         ("this_pc", Value::from(matches!(location, Location::ThisPc))),
         ("overview", Value::from(matches!(location, Location::Overview))),
         ("sort", Value::from(sort)),
@@ -1049,7 +1250,7 @@ fn update_preview(app: &AppRef) {
 fn preview_item(tab: &Tab, i: usize) -> Option<preview::Item> {
     let entry = tab.entries.get(i)?;
     let path = match &tab.history.current {
-        Location::Folder(dir) => dir.join(&entry.name),
+        Location::Folder(dir) | Location::Search { root: dir, .. } => dir.join(&entry.name),
         Location::ThisPc => tab.roots.get(i)?.clone(),
         Location::Overview => return None,
     };
@@ -1074,14 +1275,20 @@ fn preview_item(tab: &Tab, i: usize) -> Option<preview::Item> {
 
 fn status_text(tab: &Tab) -> String {
     let n = tab.entries.len();
-    let items = if n == 1 { "1 item".to_string() } else { format!("{n} items") };
+    let items = match (&tab.history.current, tab.loading) {
+        (Location::Search { .. }, true) => format!("Searching… {n} found"),
+        (Location::Search { .. }, false) if n == 1 => "1 result".to_string(),
+        (Location::Search { .. }, false) => format!("{n} results"),
+        _ if n == 1 => "1 item".to_string(),
+        _ => format!("{n} items"),
+    };
     let selected = tab.selection.len();
     if selected == 0 {
         return items;
     }
     let mut text = format!("{items}   {selected} selected");
     let files: Vec<&Entry> = tab.selection.indices().filter_map(|i| tab.entries.get(i)).filter(|e| !e.is_dir).collect();
-    if !files.is_empty() && matches!(tab.history.current, Location::Folder(_)) {
+    if !files.is_empty() && tab.history.current.folder().is_some() {
         let total: u64 = files.iter().map(|e| e.size).sum();
         text.push_str(&format!("   {}", pane_fs::format_size(total)));
     }
@@ -1140,4 +1347,129 @@ pub fn value_to_json(v: &Value) -> serde_json::Value {
         ),
         _ => serde_json::Value::Null,
     }
+}
+
+// ---------------------------------------------------------------- search
+
+/// Searches the active tab's folder (or the folder its results came from)
+/// for `query`, showing the results in the tab. An empty query leaves the
+/// results.
+pub fn search(app: &AppRef, query: &str) {
+    let (root, current) = {
+        let a = app.borrow();
+        let current = a.tab().history.current.clone();
+        (current.folder().map(Path::to_path_buf), current)
+    };
+    let Some(root) = root else { return };
+    let query = query.trim();
+    if query.is_empty() {
+        if matches!(current, Location::Search { .. }) {
+            navigate(app, Location::Folder(root));
+        }
+        return;
+    }
+    navigate(app, Location::Search { root, query: query.to_string() });
+}
+
+/// Runs tab `index`'s search, streaming matches into it as they're found.
+fn start_search(app: &AppRef, index: usize, generation: u64, tab_id: u64, root: PathBuf, query: String, list: ListOptions) {
+    let (opts, cancel) = {
+        let mut a = app.borrow_mut();
+        let opts = search::Options {
+            case_sensitive: a.settings.search_case_sensitive,
+            whole_name: a.settings.search_whole_name,
+            hidden: a.settings.search_hidden,
+            max_depth: a.settings.search_max_depth,
+        };
+        let cancel: search::Cancel = Default::default();
+        let tab = &mut a.tabs[index];
+        tab.search = Some(cancel.clone());
+        tab.entries.clear();
+        tab.roots.clear();
+        tab.rows = empty_list();
+        tab.error = None;
+        (opts, cancel)
+    };
+    if index == app.borrow().active {
+        publish_rows(app);
+    }
+    let (tx, mut rx) = unbounded::<search::Event>();
+    {
+        let (root, query) = (root.clone(), query.clone());
+        std::thread::spawn(move || {
+            search::run(&root, &query, &opts, &cancel, |event| tx.unbounded_send(event).is_ok());
+        });
+    }
+    let app = app.clone();
+    let tasks = app.borrow().tasks.clone();
+    let started = Instant::now();
+    tasks.spawn(async move {
+        let mut rows: Vec<Value> = Vec::new();
+        while let Some(event) = rx.next().await {
+            let Some(index) = app.borrow().tabs.iter().position(|t| t.id == tab_id) else { return };
+            if app.borrow().tabs[index].generation != generation {
+                return;
+            }
+            let done = matches!(event, search::Event::Done { .. });
+            {
+                let mut a = app.borrow_mut();
+                let size = icon_size(&a.tabs[index].view);
+                match event {
+                    search::Event::Found(batch) => {
+                        let texts: Vec<RowText> =
+                            batch.iter().map(|e| row_text(e, &root, &list, true)).collect();
+                        let keys: Vec<String> = texts.iter().map(|t| t.icon.clone()).collect();
+                        a.icons.request_entries(&root, &batch, &keys, size);
+                        rows.extend(texts.iter().map(RowText::value));
+                        let tab = &mut a.tabs[index];
+                        tab.entries.extend(batch);
+                        tab.rows = Value::List(Rc::from(rows.clone()));
+                    }
+                    search::Event::Done { folders } => {
+                        // Finished: sort as the tab sorts, keeping the selection.
+                        let tab = &mut a.tabs[index];
+                        let old: Vec<String> = tab.entries.iter().map(|e| e.name.clone()).collect();
+                        // By the file's own name (then where it is), not by
+                        // its path: "file name\u{1}sub\file name" while sorting.
+                        for e in &mut tab.entries {
+                            let file = e.name.rsplit('\\').next().unwrap_or(&e.name).to_string();
+                            e.name = format!("{file}\u{1}{}", e.name);
+                        }
+                        pane_fs::sort_entries(&mut tab.entries, list.sort);
+                        for e in &mut tab.entries {
+                            if let Some((_, path)) = e.name.split_once('\u{1}') {
+                                e.name = path.to_string();
+                            }
+                        }
+                        let new: Vec<&str> = tab.entries.iter().map(|e| e.name.as_str()).collect();
+                        tab.selection = tab.selection.remap(&old, &new);
+                        rows = tab
+                            .entries
+                            .iter()
+                            .map(|e| row_text(e, &root, &list, true).value())
+                            .collect();
+                        tab.rows = Value::List(Rc::from(rows.clone()));
+                        tab.loading = false;
+                        tab.search = None;
+                        eprintln!(
+                            "[pane] search {query:?} in {}: {} found in {folders} folders, {:.0} ms",
+                            root.display(),
+                            tab.entries.len(),
+                            started.elapsed().as_secs_f64() * 1e3
+                        );
+                    }
+                }
+            }
+            if index == app.borrow().active {
+                publish_rows(&app);
+                if done {
+                    publish_nav(&app);
+                }
+            }
+            if done {
+                publish_tabs(&app);
+                return;
+            }
+        }
+    });
 }
