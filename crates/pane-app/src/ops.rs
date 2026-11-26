@@ -202,6 +202,7 @@ pub fn copy(ops: &OpsRef, app: &AppRef, cut: bool) {
         None
     };
     publish_cut(ops, app);
+    crate::app::refresh_clipboard(app);
 }
 
 pub fn paste(ops: &OpsRef, app: &AppRef) {
@@ -225,6 +226,7 @@ pub fn paste(ops: &OpsRef, app: &AppRef) {
                 pane_shell::clipboard::clear(hwnd());
                 ops2.borrow_mut().cut_set = None;
                 publish_cut(&ops2, &app2);
+                crate::app::refresh_clipboard(&app2);
             }
         })),
     );

@@ -33,6 +33,40 @@ Left for later from Milestone 5:
 - [ ] Language choice (Pane is English only for now)
 - [ ] A log file (Pane's messages go nowhere in a release build)
 
+## Next: Folder view redesign (A, B, C)
+
+Three changes to the folder view, mocked up at https://claude.ai/artifact/5YA5RmgsAq3oj69kGALnRH (private to the owner). They keep Pane Amber, the LED dot-matrix and the keyboard model. Build them in this order; each can ship on its own. **Status: A is built (not yet committed or released); B and C are next.** Check each one in the running dev build (`target\debug\pane.exe`, not the installed copy).
+
+### A. A command bar that follows the selection
+
+The toolbar shows ten unlabeled icons at all times, half of them disabled with nothing selected. Instead:
+
+- [x] Toolbar splits into two rows. Top capsule: back / forward / up / refresh, the path pill, search, More. Command row under it: commands on the left; Sort, the view switch and the preview toggle on the right. The command row is hidden on the Overview; on This PC it shows only the right side.
+- [x] Nothing selected: an amber "New folder" button, and "Paste N items" ("Move N items here" after a cut) only while the clipboard holds files. Hidden in search results, which aren't a folder.
+- [x] With a selection: a chip "3 files · 16 KB" (count in amber, "files" / "folders" / "items", the files' size; × clears the selection like Esc), then labelled Open, Copy, Cut, Rename (one item only), Delete. No disabled buttons are ever shown. Tooltips show the current key from `shortcuts.hint(id)`, so rebinding updates them.
+- [x] Sort shows its current key as text ("Sort Name").
+- [x] The search box is wider and its placeholder says "Search <folder> and subfolders".
+- [x] Rust publishes `shared("clipboard")` = `{ count, cut }` (`app::refresh_clipboard`: checks the clipboard sequence number on selection changes, after copy / cut / paste, and when the window becomes active) and `sel.files`, `sel.folders`, `sel.size`.
+- [ ] Later, if wanted: a "New" menu with more than New folder (text file and so on).
+- Files: `ui/components/toolbar.luau`, `ui/shortcuts.luau` (`hint`), `ui/state.luau`, `crates/pane-app/src/app.rs`, `crates/pane-app/src/main.rs` (window-active effect), `crates/pane-app/src/ops.rs`, `crates/pane-shell/src/clipboard.rs` (`sequence`).
+- Checked in the dev build: nothing selected, three files, one file (Rename shows), Copy → "Paste 3 items", This PC, Overview. Not checked: light theme, a narrow window.
+
+### B. A list you can read at a glance
+
+- [ ] Relative dates: "Today 9:26 AM", "Yesterday 4:10 PM", "Mon 10:37 PM" within a week, then "Nov 12" (and "Nov 12, 2025" in other years). Full timestamp in the tooltip. A setting keeps the old absolute format. An amber dot marks changes in the last hour.
+- [ ] A Kind column replaces Type: folders show their item count ("9 items", counted lazily); files show a readable kind ("Markdown", "Lockfile") and a small mono extension tag after the name.
+- [ ] Group headers when folders-first is on and sorted by name: "FOLDERS 8 ··· 5.0 GB" and "FILES 6 ··· 147 KB".
+- [ ] Folder sizes with a 10-LED bar showing each folder's share of the current folder. **Needs new work:** the scan cache (`pane-scan` `ScanResult`) keeps only top items per category, not a size per folder. Plan: a background size worker like `thumbs.rs` (LIFO queue, generation counter, cancelled on navigation), leaving the cell blank until known; consider caching results by path + modified time.
+- Files: `crates/pane-app/src/app.rs` (`row_text`, `ListOptions`), a new `crates/pane-app/src/sizes.rs`, `ui/components/views.luau`, `ui/components/meter.luau`, settings for the date format.
+
+### C. A footer that knows about space
+
+- [ ] The status bar becomes three cells with hairline dividers: selection ("14 items · 3 selected · 13 KB"), running operations, and the drive's free space ("C: [mini LED meter] 124 GB free", category colours as in the Overview; click opens the Overview).
+- [ ] One running copy / move / delete shows inline in the footer: icon, "Copying to D:\Backup", a 24-LED progress bar, percent, time left. Two or more show "2 running"; clicking opens a popover above the footer with today's cards (pause / cancel). The cards no longer cover the file list. Windows' own conflict dialogs are unchanged.
+- [ ] The sidebar drive row gets a readable meter: a 6 px dot row, free space right-aligned in mono, "352 of 476 GB used" below, and a highlight on the current drive.
+- [ ] The operations cell shrinks first when the window narrows.
+- Files: `ui/app.luau` (`status_bar`), `crates/pane-app/src/app.rs` (`status_text` splits into fields), `ui/components/ops_panel.luau`, `ui/components/sidebar.luau`, `ui/components/meter.luau`, `crates/pane-shell/src/places.rs`.
+
 ## Milestone 4 follow-ups
 
 - [ ] Thumbnail cache on disk, so folders opened again after a restart don't wait (measure Windows' own cache first)

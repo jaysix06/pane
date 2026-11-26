@@ -1,6 +1,9 @@
--- The toolbar: a floating capsule with back / forward / up / refresh, the
--- path pill (mono breadcrumbs, or a field while editing), the view
--- switcher, and the Sort and More menus.
+-- The toolbar, in two rows. A floating capsule for getting about: back /
+-- forward / up / refresh, the path pill (mono breadcrumbs, or a field while
+-- editing), search and More. Under it, a command row that follows the
+-- selection: with nothing selected, New folder and Paste; with a selection,
+-- a chip saying what's selected and its commands, labelled. Sort, the view
+-- switcher and the preview toggle sit at its right.
 
 local state = require("../state")
 local common = require("./common")
@@ -192,7 +195,7 @@ local function search_box(): Node
 	end)
 	local focused = ui.state("search_focused", false)
 	return ui.row {
-		w = 220,
+		w = 280,
 		shrink = 0,
 		h = 34,
 		pl = 10,
@@ -215,7 +218,7 @@ local function search_box(): Node
 			placeholder = function()
 				local n = state.nav:get()
 				if n and n.crumbs and #n.crumbs > 0 and not n.search then
-					return `Search {n.crumbs[#n.crumbs].label}`
+					return `Search {n.crumbs[#n.crumbs].label} and subfolders`
 				end
 				return "Search"
 			end,
@@ -343,30 +346,193 @@ local function view_switch(): Node
 	}
 end
 
--- New folder, cut, copy, paste, rename, delete: shown in folders.
-local function file_commands(): Node
-	local function has_selection(): boolean
-		return state.sel:get().count > 0
+-- A button with an icon and a word: the command row's buttons. `primary`
+-- is the amber one; `danger` tints the icon.
+local function text_button(props: {
+	label: string | () -> string,
+	name: string?,
+	icon: string,
+	on_click: () -> (),
+	tooltip: (() -> string)?,
+	primary: boolean?,
+	danger: boolean?,
+}): Node
+	local primary = props.primary == true
+	return ui.button {
+		label = props.name or props.label,
+		-- A node, so a rebound key shows without a reload.
+		tooltip = if props.tooltip then ui.text { props.tooltip } else nil,
+		tooltip_placement = { side = "bottom", align = "center", offset = 6 },
+		on_click = props.on_click,
+		h = 30,
+		pl = 9,
+		pr = 11,
+		gap = 7,
+		items = "center",
+		shrink = 0,
+		rounded = "$radius.md",
+		bg = if primary then "$accent" else "#00000000",
+		color = if primary then "$accent.text" else "$text.primary",
+		hover = if primary then { bg = "$accent.hover" } else { bg = "$hover" },
+		active = { bg = if primary then "$accent" else "$pressed" },
+		ui.div {
+			color = if primary then "$accent.text" elseif props.danger then "$danger" else "$text.secondary",
+			icons.icon(props.icon, 15),
+		},
+		ui.text { props.label, text_size = 13, weight = if primary then 600 else 400 },
+	}
+end
+
+local function hint(id: string): () -> string
+	return function()
+		return shortcuts.hint(id)
 	end
+end
+
+-- What's selected, after its count: "files · 13 KB".
+local function selection_words(): string
+	local sel = state.sel:get()
+	local files, folders = sel.files or 0, sel.folders or 0
+	local one = sel.count == 1
+	local noun = if folders == 0
+		then (if one then "file" else "files")
+		elseif files == 0 then (if one then "folder" else "folders")
+		else "items"
+	local size = sel.size or ""
+	return if size ~= "" then `{noun} · {size}` else noun
+end
+
+-- The selection as a chip: its count in amber, what and how big, and an
+-- × that clears it (as Esc does).
+local function selection_chip(): Node
+	return ui.row {
+		h = 30,
+		pl = 10,
+		pr = 3,
+		gap = 5,
+		items = "center",
+		shrink = 0,
+		rounded = "$radius.md",
+		bg = "$selection.item",
+		border = 1,
+		border_color = "$selection",
+		ui.text {
+			function()
+				return tostring(state.sel:get().count)
+			end,
+			font = "$font.mono",
+			text_size = 12,
+			weight = 600,
+			color = "$accent",
+		},
+		ui.text { selection_words, font = "$font.mono", text_size = 12, color = "$text.primary" },
+		ui.button {
+			label = "Select none",
+			tooltip = "Select none (Esc)",
+			tooltip_placement = { side = "bottom", align = "center", offset = 6 },
+			on_click = ui.action("select_none"),
+			w = 22,
+			h = 22,
+			p = 0,
+			ml = 2,
+			rounded = "$radius.sm",
+			bg = "#00000000",
+			color = "$text.secondary",
+			hover = { bg = "$hover", color = "$text.primary" },
+			items = "center",
+			justify = "center",
+			icons.icon("close", 12),
+		},
+	}
+end
+
+-- Commands for what's selected. Nothing on the row is ever disabled: what
+-- doesn't apply isn't shown.
+local function selection_commands(): Node
 	return ui.row {
 		gap = 2,
 		items = "center",
-		common.icon_button { label = "New folder (Ctrl+Shift+N)", icon = "folder_plus", on_click = commands.new_folder },
-		ui.div { w = 1, h = 18, bg = "$border.subtle", mx = 4 },
-		common.icon_button { label = "Cut (Ctrl+X)", icon = "cut", on_click = commands.cut, enabled = has_selection },
-		common.icon_button { label = "Copy (Ctrl+C)", icon = "copy", on_click = commands.copy, enabled = has_selection },
-		common.icon_button { label = "Paste (Ctrl+V)", icon = "paste", on_click = commands.paste },
-		common.icon_button { label = "Rename (F2)", icon = "rename", on_click = commands.rename, enabled = has_selection },
-		common.icon_button {
-			label = "Delete (Del)",
+		selection_chip(),
+		ui.div { w = 1, h = 18, bg = "$border.subtle", mx = 6 },
+		text_button {
+			label = "Open",
+			icon = "external",
+			tooltip = function()
+				return "Open (Enter)"
+			end,
+			on_click = function()
+				ui.invoke("open_selection")
+			end,
+		},
+		text_button { label = "Copy", icon = "copy", tooltip = hint("copy"), on_click = commands.copy },
+		text_button { label = "Cut", icon = "cut", tooltip = hint("cut"), on_click = commands.cut },
+		ui.show(function()
+			return state.sel:get().count == 1
+		end, text_button { label = "Rename", icon = "rename", tooltip = hint("rename"), on_click = commands.rename }),
+		text_button {
+			label = "Delete",
 			icon = "trash",
+			danger = true,
+			tooltip = function()
+				return shortcuts.hint("delete") .. ". Hold Shift to delete permanently"
+			end,
 			on_click = function()
 				commands.delete(ui.modifiers.shift:peek())
 			end,
-			enabled = has_selection,
 		},
-		ui.div { w = 1, h = 18, bg = "$border.subtle", mx = 4 },
 	}
+end
+
+-- Commands for the folder itself, with nothing selected: a new folder, and
+-- pasting what's on the clipboard (only while it holds files).
+local function folder_commands(): Node
+	return ui.row {
+		gap = 6,
+		items = "center",
+		text_button {
+			label = "New folder",
+			icon = "folder_plus",
+			primary = true,
+			tooltip = hint("new_folder"),
+			on_click = commands.new_folder,
+		},
+		ui.show(
+			function()
+				return state.clipboard:get().count > 0
+			end,
+			text_button {
+				name = "Paste",
+				label = function()
+					local c = state.clipboard:get()
+					local what = if c.count == 1 then "1 item" else `{c.count} items`
+					return if c.cut then `Move {what} here` else `Paste {what}`
+				end,
+				icon = "paste",
+				tooltip = hint("paste"),
+				on_click = commands.paste,
+			}
+		),
+	}
+end
+
+-- The command row's left side: the selection's commands, or the folder's.
+local function command_row_left(): Node
+	return ui.switch(function()
+		local n = state.nav:get()
+		if n == nil or n.this_pc then
+			return "none"
+		elseif state.sel:get().count > 0 then
+			return "selection"
+		elseif n.search then
+			-- Search results aren't a folder: nothing to make or paste there.
+			return "none"
+		end
+		return "folder"
+	end, {
+		selection = selection_commands(),
+		folder = folder_commands(),
+		none = ui.div {},
+	})
 end
 
 local function sort_menu(): Node
@@ -399,7 +565,33 @@ local function sort_menu(): Node
 	return ui.menu {
 		open = open,
 		label = "Sort",
-		anchor = common.icon_button { label = "Sort", icon = "sort", on_click = ui.toggle(open) },
+		-- Says what it sorts by, so the order on screen is never a guess.
+		anchor = ui.button {
+			label = "Sort",
+			on_click = ui.toggle(open),
+			h = 30,
+			px = 9,
+			gap = 6,
+			items = "center",
+			shrink = 0,
+			rounded = "$radius.md",
+			bg = "#00000000",
+			color = "$text.secondary",
+			hover = { bg = "$hover", color = "$text.primary" },
+			active = { bg = "$pressed" },
+			icons.icon("sort", 15),
+			ui.text { "Sort", text_size = 12.5 },
+			ui.text {
+				function()
+					local n = state.nav:get()
+					local key = if n then n.sort else "name"
+					return ({ name = "Name", date = "Date", type = "Type", size = "Size" } :: { [string]: string })[key] or "Name"
+				end,
+				text_size = 12.5,
+				weight = 600,
+				color = "$text.primary",
+			},
+		},
 		common.check_item("Name", sort_is("name"), by("name")),
 		common.check_item("Date modified", sort_is("date"), by("date")),
 		common.check_item("Type", sort_is("type"), by("type")),
@@ -458,11 +650,13 @@ local function more_menu(): Node
 end
 
 return function(): Node
-	return ui.row {
+	return ui.column {
 		w_full = true,
 		px = 8,
 		pt = 2,
-		pb = 8,
+		pb = 6,
+		gap = 6,
+		-- Getting about: navigation, the path, search, and More.
 		ui.row {
 			w_full = true,
 			h = 46,
@@ -490,29 +684,36 @@ return function(): Node
 				local n = state.nav:get()
 				return n ~= nil and not n.overview and not n.this_pc
 			end, search_box()),
-			ui.div { w = 4 },
-			ui.show(function()
-				local n = state.nav:get()
-				return n ~= nil and not n.overview and not n.this_pc
-			end, file_commands()),
-			ui.show(function()
-				local n = state.nav:get()
-				return not (n and n.overview)
-			end, ui.row { gap = 4, items = "center", view_switch(), sort_menu() }),
-			ui.show(function()
-				local n = state.nav:get()
-				return not (n and n.overview)
-			end, common.icon_button {
-				label = "Preview pane (Alt+P)",
-				icon = "preview",
-				on_click = function()
-					ui.invoke("set_setting", { key = "preview_pane", value = not state.setting("preview_pane") })
-				end,
-				active = function()
-					return state.setting("preview_pane") == true
-				end,
-			}),
 			more_menu(),
 		},
+		-- Acting: commands for the selection (or the folder) on the left,
+		-- how the folder shows on the right.
+		ui.show(
+			function()
+				local n = state.nav:get()
+				return n ~= nil and not n.overview
+			end,
+			ui.row {
+				w_full = true,
+				h = 34,
+				px = 4,
+				gap = 4,
+				items = "center",
+				command_row_left(),
+				ui.div { grow = 1, min_w = 8 },
+				sort_menu(),
+				view_switch(),
+				common.icon_button {
+					label = "Preview pane (Alt+P)",
+					icon = "preview",
+					on_click = function()
+						ui.invoke("set_setting", { key = "preview_pane", value = not state.setting("preview_pane") })
+					end,
+					active = function()
+						return state.setting("preview_pane") == true
+					end,
+				},
+			}
+		),
 	}
 end

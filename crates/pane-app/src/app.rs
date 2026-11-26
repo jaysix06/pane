@@ -108,6 +108,8 @@ struct Out {
     places: Shared,
     settings: Shared,
     toast: Shared,
+    /// Files on the clipboard: { count, cut } ("Paste 2 items").
+    clipboard: Shared,
 }
 
 pub struct App {
@@ -126,6 +128,8 @@ pub struct App {
     save_pending: bool,
     session_path: PathBuf,
     session_pending: bool,
+    /// The clipboard's sequence number when it was last read.
+    clip_seq: u32,
     pub home: PathBuf,
 }
 
@@ -152,6 +156,10 @@ impl App {
             places: host.shared("places", Value::Nil),
             settings: host.shared("settings", json_to_value(&settings.to_json())),
             toast: host.shared("toast", Value::Nil),
+            clipboard: host.shared(
+                "clipboard",
+                Value::record([("count", Value::from(0.0)), ("cut", Value::from(false))]),
+            ),
         };
         let (icons, icon_loop) = Icons::start(host.clone());
         tasks.spawn(icon_loop);
@@ -208,6 +216,7 @@ impl App {
             save_pending: false,
             session_path,
             session_pending: false,
+            clip_seq: 0,
             home,
         }));
         if let LoadNote::Recovered(backup) = note {
@@ -1209,14 +1218,50 @@ fn publish_selection(app: &AppRef) {
         .map(|e| (Rc::from(e.name.as_str()), Value::from(true)))
         .collect();
     let focus = tab.selection.focus().map_or(0.0, |f| (f + 1) as f64);
+    let summary = selection_summary(tab);
     a.out.sel.set(Value::record([
         ("ids", Value::record(ids)),
         ("count", Value::from(tab.selection.len() as f64)),
         ("focus", Value::from(focus)),
+        ("files", Value::from(summary.files as f64)),
+        ("folders", Value::from(summary.folders as f64)),
+        ("size", summary.size.map_or(Value::from(""), |b| Value::from(pane_fs::format_size(b).as_str()))),
     ]));
     a.out.status.set(Value::from(status_text(tab).as_str()));
     drop(a);
     update_preview(app);
+    refresh_clipboard(app);
+}
+
+/// How many files and folders are selected, and the files' total size
+/// (in a folder, when any files are selected).
+struct SelectionSummary {
+    files: usize,
+    folders: usize,
+    size: Option<u64>,
+}
+
+fn selection_summary(tab: &Tab) -> SelectionSummary {
+    let selected: Vec<&Entry> = tab.selection.indices().filter_map(|i| tab.entries.get(i)).collect();
+    let files: Vec<&&Entry> = selected.iter().filter(|e| !e.is_dir).collect();
+    let size = (!files.is_empty() && tab.history.current.folder().is_some()).then(|| files.iter().map(|e| e.size).sum());
+    SelectionSummary { files: files.len(), folders: selected.len() - files.len(), size }
+}
+
+/// Publishes how many files are on the clipboard, when it has changed since
+/// it was last read (any app may change it: checked as the selection
+/// changes, after copy and cut, and when the window comes to the front).
+pub fn refresh_clipboard(app: &AppRef) {
+    let seq = pane_shell::clipboard::sequence();
+    if std::mem::replace(&mut app.borrow_mut().clip_seq, seq) == seq {
+        return;
+    }
+    let (count, cut) = pane_shell::clipboard::get_files(pane_shell::active_window().0 as isize)
+        .map_or((0, false), |(files, cut)| (files.len(), cut));
+    app.borrow().out.clipboard.set(Value::record([
+        ("count", Value::from(count as f64)),
+        ("cut", Value::from(cut)),
+    ]));
 }
 
 /// Shows the selection in the preview pane, if it's open: one item, or how
@@ -1287,9 +1332,7 @@ fn status_text(tab: &Tab) -> String {
         return items;
     }
     let mut text = format!("{items}   {selected} selected");
-    let files: Vec<&Entry> = tab.selection.indices().filter_map(|i| tab.entries.get(i)).filter(|e| !e.is_dir).collect();
-    if !files.is_empty() && tab.history.current.folder().is_some() {
-        let total: u64 = files.iter().map(|e| e.size).sum();
+    if let Some(total) = selection_summary(tab).size {
         text.push_str(&format!("   {}", pane_fs::format_size(total)));
     }
     text

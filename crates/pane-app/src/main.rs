@@ -103,9 +103,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             cx.tasks.spawn(host.watch(Duration::from_millis(250)));
             // The Settings window (ui/settings.luau declares it).
             let follow = windows::follow(&host, cx);
+            // Files copied in another app: "Paste N items" when Pane comes back.
+            let clipboard_watch = {
+                let (a, active, runtime) = (app.clone(), cx.ui.observe_window_active(), cx.ui.runtime.clone());
+                cx.ui.runtime.effect(move || {
+                    if active.get() {
+                        runtime.untracked(|| app::refresh_clipboard(&a));
+                    }
+                })
+            };
             cx.render(host.view());
             cx.on_closed(move || {
                 drop(follow);
+                drop(clipboard_watch);
                 app::save_now(&app);
                 host.save();
             });

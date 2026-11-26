@@ -35,7 +35,16 @@ export type Nav = {
 export type Tab = { id: number, title: string, path: string, loading: boolean }
 export type Place = { label: string, path: string, icon: string, id: string?, used: number?, detail: string?, pinned: boolean? }
 export type Places = { pinned: { Place }, known: { Place }, drives: { Place } }
-export type Sel = { ids: { [string]: boolean }, count: number, focus: number }
+-- The selection: ids, how many, the focused row, files and folders among
+-- them, and the files' total size ("13 KB", "" when not known).
+export type Sel = {
+	ids: { [string]: boolean },
+	count: number,
+	focus: number,
+	files: number?,
+	folders: number?,
+	size: string?,
+}
 
 local M = {}
 
@@ -63,6 +72,8 @@ M.update_check = ui.shared("update_check", nil :: string?)
 M.about = ui.shared("about", nil :: any)
 -- File operations in progress (crates/pane-app/src/ops.rs).
 M.ops = ui.shared("ops", {} :: { any })
+-- Files on the clipboard: { count, cut } ("Paste 2 items").
+M.clipboard = ui.shared("clipboard", { count = 0, cut = false } :: { count: number, cut: boolean })
 -- Cut items: { folder, ids }, dimmed while that folder shows.
 M.cut = ui.shared("cut", {} :: any)
 -- Rust asks a row to start renaming: { id, at }.

@@ -142,6 +142,17 @@ function M.is_custom(command: Command): boolean
 	return (state.setting("shortcuts") or {})[command.id] ~= nil
 end
 
+-- A command's name with its first key, for tooltips: "Copy (Ctrl+C)".
+function M.hint(id: string): string
+	for _, c in M.list do
+		if c.id == id then
+			local keys = M.keys(c)
+			return if #keys > 0 then `{c.label} ({M.label(keys[1])})` else c.label
+		end
+	end
+	return id
+end
+
 -- The command `key` runs, if any.
 function M.command_for(key: string): Command?
 	for _, c in M.list do

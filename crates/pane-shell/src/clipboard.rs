@@ -6,8 +6,8 @@ use std::path::PathBuf;
 
 use windows::Win32::Foundation::{HANDLE, HGLOBAL, HWND};
 use windows::Win32::System::DataExchange::{
-    CloseClipboard, EmptyClipboard, GetClipboardData, IsClipboardFormatAvailable, OpenClipboard, RegisterClipboardFormatW,
-    SetClipboardData,
+    CloseClipboard, EmptyClipboard, GetClipboardData, GetClipboardSequenceNumber, IsClipboardFormatAvailable, OpenClipboard,
+    RegisterClipboardFormatW, SetClipboardData,
 };
 use windows::Win32::Foundation::GlobalFree;
 use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock};
@@ -151,6 +151,13 @@ pub fn get_files(hwnd: isize) -> Option<(Vec<PathBuf>, bool)> {
         let _ = CloseClipboard();
     }
     files.filter(|f| !f.is_empty()).map(|f| (f, cut))
+}
+
+/// A number that changes whenever anything (in any app) changes the
+/// clipboard: check it before reading the clipboard again.
+pub fn sequence() -> u32 {
+    // SAFETY: plain query.
+    unsafe { GetClipboardSequenceNumber() }
 }
 
 /// Clears the clipboard (after a cut-and-paste moved the files).
