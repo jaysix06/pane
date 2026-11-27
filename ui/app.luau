@@ -278,7 +278,7 @@ return ui.column {
 		grow = 1,
 		w_full = true,
 		min_h = 0,
-		Toolbar(),
+		Toolbar.nav(),
 		ui.row {
 			grow = 1,
 			w_full = true,
@@ -288,34 +288,40 @@ return ui.column {
 				grow = 1,
 				min_w = 0,
 				h_full = true,
-				bg = "$surface.base",
-				rounded_tl = "$radius.lg",
-				border_sides = { 1, 0, 0, 1 },
-				border_color = "$border.subtle",
-				inset_shadow = { x = 0, y = 1, color = "$app.highlight" },
-				overflow = "hidden",
-				relative = true,
-				ui.show(is_overview, ui.column {
+				Toolbar.commands(),
+				ui.column {
 					grow = 1,
 					w_full = true,
 					min_h = 0,
-					Overview(),
-					overview_footer(),
-				}, ui.row {
-					grow = 1,
-					w_full = true,
-					min_h = 0,
-					ui.column {
+					bg = "$surface.base",
+					rounded_tl = "$radius.lg",
+					border_sides = { 1, 0, 0, 1 },
+					border_color = "$border.subtle",
+					inset_shadow = { x = 0, y = 1, color = "$app.highlight" },
+					overflow = "hidden",
+					relative = true,
+					ui.show(is_overview, ui.column {
 						grow = 1,
-						min_w = 0,
-						h_full = true,
-						Views(),
-						status_bar(),
-					},
-					ui.show(function()
-						return state.setting("preview_pane") == true
-					end, Preview()),
-				}),
+						w_full = true,
+						min_h = 0,
+						Overview(),
+						overview_footer(),
+					}, ui.row {
+						grow = 1,
+						w_full = true,
+						min_h = 0,
+						ui.column {
+							grow = 1,
+							min_w = 0,
+							h_full = true,
+							Views(),
+							status_bar(),
+						},
+						ui.show(function()
+							return state.setting("preview_pane") == true
+						end, Preview()),
+					}),
+				},
 			},
 		},
 	},

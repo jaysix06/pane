@@ -1,9 +1,9 @@
--- The toolbar, in two rows. A floating capsule for getting about: back /
--- forward / up / refresh, the path pill (mono breadcrumbs, or a field while
--- editing), search and More. Under it, a command row that follows the
--- selection: with nothing selected, New folder and Paste; with a selection,
--- a chip saying what's selected and its commands, labelled. Sort, the view
--- switcher and the preview toggle sit at its right.
+-- The toolbar. A floating capsule for getting about, across the window:
+-- back / forward / up / refresh, the path pill (mono breadcrumbs, or a field
+-- while editing), search and More. Under it, over the folder view only, a
+-- command row: the folder's title and item count (or, with a selection, a
+-- chip saying what's selected and its commands, labelled). New, Sort, the
+-- view switcher and the preview toggle sit at its right.
 
 local state = require("../state")
 local common = require("./common")
@@ -612,8 +612,61 @@ local function empty_bin_button(): Node
 	})
 end
 
--- The command row's left side: the selection's commands, or the folder's.
+local command_row_commands: () -> Node
+
+-- The folder's name and how many items it holds: the command row's heading
+-- while nothing is selected (a selection puts its chip there instead).
+local function folder_title(): Node
+	local function name(): string
+		local n = state.nav:get()
+		if n == nil then
+			return ""
+		elseif n.search then
+			return `"{n.search}"`
+		elseif n.crumbs and #n.crumbs > 0 then
+			return n.crumbs[#n.crumbs].label
+		end
+		return ""
+	end
+	return ui.row {
+		gap = 10,
+		items = "center",
+		min_w = 0,
+		shrink = 1,
+		ui.text { name, literal = true, text_size = 15, weight = 600, color = "$text.primary", truncate = true, min_w = 0, shrink = 1 },
+		ui.text {
+			function()
+				return (state.status:get() :: any).items or ""
+			end,
+			font = "$font.mono",
+			text_size = 11.5,
+			color = "$text.tertiary",
+			shrink = 0,
+		},
+	}
+end
+
+local function selecting(): boolean
+	local n = state.nav:get()
+	return n ~= nil and not n.this_pc and state.sel:get().count > 0
+end
+
+-- The command row's left side: the selection's commands, or the folder's
+-- title and commands.
 local function command_row_left(): Node
+	return ui.row {
+		gap = 12,
+		items = "center",
+		min_w = 0,
+		shrink = 1,
+		ui.show(function()
+			return not selecting()
+		end, folder_title()),
+		command_row_commands(),
+	}
+end
+
+function command_row_commands(): Node
 	return ui.switch(function()
 		local n = state.nav:get()
 		if n == nil or n.this_pc then
@@ -751,13 +804,12 @@ local function more_menu(): Node
 	})
 end
 
-return function(): Node
+local function nav_bar(): Node
 	return ui.column {
 		w_full = true,
 		px = 8,
 		pt = 2,
 		pb = 6,
-		gap = 6,
 		-- Getting about: navigation, the path, search, and More.
 		ui.row {
 			w_full = true,
@@ -788,40 +840,48 @@ return function(): Node
 			end, search_box()),
 			more_menu(),
 		},
-		-- Acting: commands for the selection (or the folder) on the left,
-		-- how the folder shows on the right.
-		ui.show(
-			function()
-				local n = state.nav:get()
-				return n ~= nil and not n.overview
-			end,
-			ui.row {
-				w_full = true,
-				h = 34,
-				px = 4,
-				gap = 4,
-				items = "center",
-				command_row_left(),
-				ui.div { grow = 1, min_w = 8 },
-				-- New: in a folder (not This PC or search results).
-				ui.show(function()
-					local n = state.nav:get()
-					return n ~= nil and not n.this_pc and not n.search and not n.recycle
-				end, new_menu()),
-				empty_bin_button(),
-				sort_menu(),
-				view_switch(),
-				common.icon_button {
-					label = "Preview pane (Alt+P)",
-					icon = "preview",
-					on_click = function()
-						ui.invoke("set_setting", { key = "preview_pane", value = not state.setting("preview_pane") })
-					end,
-					active = function()
-						return state.setting("preview_pane") == true
-					end,
-				},
-			}
-		),
 	}
 end
+
+-- Acting: the folder's title or the selection's commands on the left, how
+-- the folder shows on the right. It sits over the folder view only, so the
+-- sidebar runs up to the navigation bar (nothing goes above the sidebar).
+local function command_row(): Node
+	return ui.show(
+		function()
+			local n = state.nav:get()
+			return n ~= nil and not n.overview
+		end,
+		ui.row {
+			w_full = true,
+			h = 34,
+			pl = 15,
+			pr = 12,
+			mb = 6,
+			gap = 4,
+			items = "center",
+			command_row_left(),
+			ui.div { grow = 1, min_w = 8 },
+			-- New: in a folder (not This PC or search results).
+			ui.show(function()
+				local n = state.nav:get()
+				return n ~= nil and not n.this_pc and not n.search and not n.recycle
+			end, new_menu()),
+			empty_bin_button(),
+			sort_menu(),
+			view_switch(),
+			common.icon_button {
+				label = "Preview pane (Alt+P)",
+				icon = "preview",
+				on_click = function()
+					ui.invoke("set_setting", { key = "preview_pane", value = not state.setting("preview_pane") })
+				end,
+				active = function()
+					return state.setting("preview_pane") == true
+				end,
+			},
+		}
+	)
+end
+
+return { nav = nav_bar, commands = command_row }
