@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/pane-fs", "crates/pane-shell", "crates/pane-scan", "crates/pane-scan-service", "crates/pane-app", "crates/pane-setup"]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 license = "MIT"
 

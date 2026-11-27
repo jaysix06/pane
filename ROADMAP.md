@@ -1,6 +1,6 @@
 # Pane roadmap
 
-Where Pane is and what comes next. Latest release: **0.2.0** (Settings, folder search, session restore, the folder view redesign, and Milestone 6's polish and performance).
+Where Pane is and what comes next. Latest release: **0.2.1** (0.2.0 plus a tab-closing fix: Settings, folder search, session restore, the folder view redesign, and Milestone 6's polish and performance).
 
 ## Done
 
