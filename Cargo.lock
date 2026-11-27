@@ -2473,7 +2473,7 @@ dependencies = [
 
 [[package]]
 name = "pane-app"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "embed-resource",
  "futures-channel",
@@ -2492,7 +2492,7 @@ dependencies = [
 
 [[package]]
 name = "pane-fs"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "windows",
  "zip",
@@ -2500,7 +2500,7 @@ dependencies = [
 
 [[package]]
 name = "pane-scan"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2509,7 +2509,7 @@ dependencies = [
 
 [[package]]
 name = "pane-scan-service"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "pane-scan",
  "serde",
@@ -2520,7 +2520,7 @@ dependencies = [
 
 [[package]]
 name = "pane-setup"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "embed-resource",
  "miniz_oxide 0.9.1",
@@ -2529,7 +2529,7 @@ dependencies = [
 
 [[package]]
 name = "pane-shell"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "windows",
  "windows-core",
