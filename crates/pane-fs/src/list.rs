@@ -4,8 +4,15 @@ use std::path::Path;
 use crate::Entry;
 
 /// Lists a folder's entries (without "." and ".."), unsorted.
-#[cfg(windows)]
 pub fn list_dir(path: &Path) -> io::Result<Vec<Entry>> {
+    list_dir_early(path, usize::MAX, |_| {})
+}
+
+/// Lists a folder like [`list_dir`], and hands `early` the first `first`
+/// entries as soon as it has them, if the folder has more: a huge folder's
+/// first rows can be shown while the rest is still being read.
+#[cfg(windows)]
+pub fn list_dir_early(path: &Path, first: usize, early: impl FnOnce(&[Entry])) -> io::Result<Vec<Entry>> {
     use std::os::windows::ffi::OsStrExt;
     use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_NO_MORE_FILES};
     use windows::Win32::Storage::FileSystem::{
@@ -36,10 +43,16 @@ pub fn list_dir(path: &Path) -> io::Result<Vec<Entry>> {
     };
 
     let mut out = Vec::with_capacity(256);
+    let mut early = Some(early);
     loop {
         let len = data.cFileName.iter().position(|&c| c == 0).unwrap_or(data.cFileName.len());
         let name = String::from_utf16_lossy(&data.cFileName[..len]);
         if name != "." && name != ".." {
+            if out.len() == first
+                && let Some(early) = early.take()
+            {
+                early(&out);
+            }
             let attrs = data.dwFileAttributes;
             let is_dir = attrs & FILE_ATTRIBUTE_DIRECTORY.0 != 0;
             out.push(Entry {
@@ -70,10 +83,16 @@ pub fn list_dir(path: &Path) -> io::Result<Vec<Entry>> {
 
 /// Portable fallback so the crate builds and tests elsewhere.
 #[cfg(not(windows))]
-pub fn list_dir(path: &Path) -> io::Result<Vec<Entry>> {
+pub fn list_dir_early(path: &Path, first: usize, early: impl FnOnce(&[Entry])) -> io::Result<Vec<Entry>> {
     let mut out = Vec::new();
+    let mut early = Some(early);
     for item in std::fs::read_dir(path)? {
         let item = item?;
+        if out.len() == first
+            && let Some(early) = early.take()
+        {
+            early(&out);
+        }
         let meta = item.metadata()?;
         let name = item.file_name().to_string_lossy().into_owned();
         out.push(Entry {
@@ -105,6 +124,23 @@ mod tests {
         assert!(!entries[0].is_dir);
         assert_eq!(entries[1].name, "sub");
         assert!(entries[1].is_dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn early_entries_come_only_when_there_are_more() {
+        let dir = std::env::temp_dir().join(format!("pane-fs-early-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for i in 0..5 {
+            std::fs::write(dir.join(format!("{i}.txt")), b"").unwrap();
+        }
+        let mut seen = None;
+        let all = list_dir_early(&dir, 2, |first| seen = Some(first.len())).unwrap();
+        assert_eq!((seen, all.len()), (Some(2), 5));
+        // Five entries, five asked for: nothing more to wait for.
+        let mut called = false;
+        assert_eq!(list_dir_early(&dir, 5, |_| called = true).unwrap().len(), 5);
+        assert!(!called);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

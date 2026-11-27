@@ -85,12 +85,23 @@ The toolbar shows ten unlabeled icons at all times, half of them disabled with n
 
 ## Milestone 6: Polish and performance
 
-- [ ] Idle CPU down from about 1% of a core to about 0%
-- [ ] Show the first rows of huge folders while they're still loading (100k files take about 0.58 s now; target 100 ms)
-- [ ] Bundle the UI scripts into the exe instead of shipping a `ui` folder
-- [ ] Faster memory allocator (mimalloc) and quicker startup (ship Microsoft's shader compiler)
-- [ ] Startup time and memory checks against Explorer
-- Measured 2026-11-27 against File Pilot (release build, median of 5 launches after a warm-up; "ready" = the process's CPU quiet for 500 ms):
+- [x] Idle CPU down to about 0%. The 15-second drive refresh re-published free space that moves by a few bytes, so the drive meters re-animated about 175 frames each time. Drive fullness is now rounded to thousandths (`used_share`, tested) and an unchanged reading publishes nothing: at rest Pane presents no frames (`ZGX_PRESENT_LOG`) and used one 15 ms scheduler tick in 60 s (0.03%).
+- [x] The first rows of huge folders show while the rest loads. A navigation into a folder of more than 1,000 entries publishes the first 1,000, sorted, as soon as they're read (`pane_fs::list_dir_early`, tested; `app::show_early`), then the whole folder replaces them, keeping what was selected. 100k files: the first rows ~20 ms after listing starts, and they're in the window's first frame; before, nothing showed until all 100k were listed and published (~330 ms). Not for refreshes, which keep the rows on screen. Group headers and folder sizes wait for the full listing.
+- [x] UI scripts bundled into the exe: a release build compiles `ui/` to Luau bytecode in `build.rs` (`zgx_script::build::bundle`, a script that doesn't parse fails the build) and runs it with `ScriptHost::bundled`. Debug builds still read `ui/` and reload on save. The installer no longer ships a `ui` folder and removes an older install's.
+- [x] mimalloc as the allocator (zgx-desktop's `mimalloc` feature) and Microsoft's shader compiler shipped beside `pane.exe` (`dxcompiler.dll` 1.8.2502 from the Windows SDK, copied by `scripts/build-installer.ps1`; zgx uses it over FXC when present). mimalloc: about 10% less CPU opening 100k files, for 25–45 MB more private memory. DXC matters for a cold start (no shader cache); warm launches read shaders from the cache either way.
+- [x] Startup time and memory checks against Explorer. Measured 2026-11-27, release build, median of 5 launches after a warm-up; "first frame" from `ZGX_PROFILE`; "ready" = the process's CPU quiet for 500 ms; memory at ready:
+
+  | | Window created | First frame | Ready | CPU to ready | Private memory |
+  |---|---|---|---|---|---|
+  | Pane 0.1.3 code, 30 files | 63 ms | 161 ms | 1.37 s | 0.53 s | 88 MB |
+  | Pane 0.1.3 code, 100k files | 46 ms | 168 ms (empty list) | 1.53 s | 0.98 s | 234 MB |
+  | Pane now, 30 files | 62 ms | 169 ms | 1.39 s | 0.59 s | 135 MB |
+  | Pane now, 100k files | 62 ms | 197 ms (first 1,000 rows) | 1.44 s | 0.81 s | 252–292 MB |
+  | Explorer, 30 files | 847 ms (window with title) | | | | 128 MB (own process) |
+  | Explorer, 100k files | 629 ms (window with title) | | | | 153 MB (own process, still filling) |
+
+  Pane's window is up more than ten times sooner than Explorer's. Pane uses more memory than Explorer on a 100k folder (its rows are all built at once; Explorer fills in as it goes) and mimalloc adds to it. "Ready" is about 1.4 s for both builds because of the start-up animations (about 175 frames in the first 1.5 s), not loading work.
+- Earlier measurement, against File Pilot (same method, before this milestone):
 
   | | Window created | Ready | CPU to ready | Private memory | Idle CPU |
   |---|---|---|---|---|---|
@@ -99,7 +110,12 @@ The toolbar shows ten unlabeled icons at all times, half of them disabled with n
   | File Pilot, 30 files | 471 ms | 0.56 s | 1.28 s | 462 MB | 0.31% |
   | File Pilot, 100k files | 486 ms | 0.72 s | 1.55 s | 454 MB | 0.47% |
 
-  Pane's window exists at once but takes about twice as long to go quiet, so its startup work after the window (scripts, shaders, places, update check) is the thing to cut. "Window created" isn't the first painted frame for either app; that still needs measuring.
+Left for later from Milestone 6:
+
+- [ ] Memory with 100k files: rows are built as script values all at once; build them for what's on screen (or more compactly) instead.
+- [ ] Start-up animations keep the window drawing for about 1.5 s after launch.
+- [ ] Free space is still polled every 15 s (cheap now, and nothing redraws unless it changes); drive arrival could come from `WM_DEVICECHANGE` instead.
+- [ ] Measure a cold start (empty shader cache) with DXC against FXC on this machine.
 
 ## Smaller leftovers
 

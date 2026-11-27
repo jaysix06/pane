@@ -7,7 +7,7 @@ mod size;
 mod sort;
 mod watch;
 
-pub use list::list_dir;
+pub use list::{list_dir, list_dir_early};
 pub use size::{FolderSize, background_priority, folder_size, item_count};
 pub use sort::{SortKey, SortOptions, natural_cmp, sort_entries};
 #[cfg(windows)]

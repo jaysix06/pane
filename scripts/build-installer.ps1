@@ -9,6 +9,14 @@ Set-Location $root
 
 cargo build --release -p pane-app -p pane-scan-service
 if ($LASTEXITCODE -ne 0) { throw "building Pane failed" }
+# Microsoft's shader compiler (DXC), shipped beside pane.exe: from the
+# newest Windows SDK that has the x64 one.
+$dxc = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\dxcompiler.dll" -ErrorAction SilentlyContinue |
+    Sort-Object { [version]$_.Directory.Parent.Name } -Descending | Select-Object -First 1
+if (-not $dxc) { throw "dxcompiler.dll not found: install the Windows SDK" }
+Copy-Item $dxc.FullName target\release\dxcompiler.dll -Force
+"DXC $($dxc.VersionInfo.FileVersion) from $($dxc.DirectoryName)"
+
 cargo build --release -p pane-setup
 if ($LASTEXITCODE -ne 0) { throw "building the installer failed" }
 

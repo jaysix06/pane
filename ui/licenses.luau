@@ -3,6 +3,7 @@
 
 return {
 	{ name = "Geist Mono (font)", version = "", license = "OFL-1.1" },
+	{ name = "DirectX Shader Compiler (dxcompiler.dll)", version = "1.8.2502", license = "NCSA AND MIT" },
 	{ name = "accesskit", version = "0.24.1", license = "MIT OR Apache-2.0" },
 	{ name = "accesskit_consumer", version = "0.38.0", license = "MIT OR Apache-2.0" },
 	{ name = "accesskit_windows", version = "0.34.0", license = "MIT OR Apache-2.0" },
@@ -97,6 +98,7 @@ return {
 	{ name = "libc", version = "0.2.191", license = "MIT OR Apache-2.0" },
 	{ name = "libloading", version = "0.8.9", license = "ISC" },
 	{ name = "libm", version = "0.2.16", license = "MIT" },
+	{ name = "libmimalloc-sys", version = "0.1.49", license = "MIT" },
 	{ name = "linebender_resource_handle", version = "0.1.1", license = "Apache-2.0 OR MIT" },
 	{ name = "litemap", version = "0.8.3", license = "Unicode-3.0" },
 	{ name = "litrs", version = "1.0.1", license = "MIT OR Apache-2.0" },
@@ -105,6 +107,7 @@ return {
 	{ name = "luau0-src", version = "0.22.0+luau740", license = "MIT" },
 	{ name = "memchr", version = "2.8.3", license = "Unlicense OR MIT" },
 	{ name = "memmap2", version = "0.9.12", license = "MIT OR Apache-2.0" },
+	{ name = "mimalloc", version = "0.1.52", license = "MIT" },
 	{ name = "miniz_oxide", version = "0.8.9", license = "MIT OR Zlib OR Apache-2.0" },
 	{ name = "miniz_oxide", version = "0.9.1", license = "MIT OR Zlib OR Apache-2.0" },
 	{ name = "mlua-sys", version = "0.13.0", license = "MIT" },

@@ -107,8 +107,8 @@ pub fn install(opts: Options) -> i32 {
 fn do_install(dir: &Path) -> Result<(), String> {
     let files = payload::unpack(payload::PACKED)?;
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    // An older install's UI files that this version no longer has would
-    // still be loaded: start the UI folder fresh.
+    // Pane 0.1.3 and older read their interface from a ui folder; this
+    // version carries it in pane.exe, so the folder goes.
     let _ = std::fs::remove_dir_all(dir.join("ui"));
     let mut total: u64 = 0;
     for f in &files {

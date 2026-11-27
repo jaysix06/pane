@@ -1,22 +1,26 @@
 //! Packs what Pane installs into one compressed payload the setup program
-//! carries: the release `pane.exe` and helper service, the Luau UI, and the
-//! licenses. Build those first (`scripts/build-installer.ps1` does it all).
+//! carries: the release `pane.exe` (its interface compiled in) and helper
+//! service, Microsoft's shader compiler, and the licenses. Build those
+//! first (`scripts/build-installer.ps1` does it all).
 //!
 //! Payload (before deflate): "PANE1", u32 count, then per file: u16 name
 //! length, UTF-8 name (relative, `/`-separated), u64 size, bytes.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 fn main() {
     let root = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../..");
     let release = root.join("target/release");
-    let mut files: Vec<(String, PathBuf)> = vec![
+    let files: Vec<(String, PathBuf)> = vec![
         ("pane.exe".into(), release.join("pane.exe")),
         ("pane-scan-service.exe".into(), release.join("pane-scan-service.exe")),
+        // DXC, beside pane.exe: zgx compiles its shaders with it (quicker to
+        // a cold window than FXC). Copied from the Windows SDK by
+        // scripts/build-installer.ps1.
+        ("dxcompiler.dll".into(), release.join("dxcompiler.dll")),
         ("LICENSE.txt".into(), root.join("LICENSE")),
         ("licenses/GeistMono-OFL.txt".into(), root.join("assets/fonts/GeistMono-OFL.txt")),
     ];
-    collect(&root.join("ui"), "ui", &mut files);
 
     let mut raw = Vec::new();
     raw.extend_from_slice(b"PANE1");
@@ -50,19 +54,4 @@ fn main() {
         ];
         embed_resource::compile("setup.rc", macros.iter()).manifest_optional().unwrap();
     }
-}
-
-fn collect(dir: &Path, prefix: &str, out: &mut Vec<(String, PathBuf)>) {
-    let mut entries: Vec<_> = std::fs::read_dir(dir).unwrap().flatten().collect();
-    entries.sort_by_key(|e| e.file_name());
-    for e in entries {
-        let name = format!("{prefix}/{}", e.file_name().to_string_lossy());
-        let path = e.path();
-        if path.is_dir() {
-            collect(&path, &name, out);
-        } else {
-            out.push((name, path));
-        }
-    }
-    println!("cargo:rerun-if-changed={}", dir.display());
 }

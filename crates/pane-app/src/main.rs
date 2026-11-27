@@ -36,7 +36,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if std::env::args_os().nth(1).is_some_and(|a| a == "--restore-file-manager") {
         std::process::exit(about::restore_from_command_line());
     }
-    let ui_dir = ui_dir();
     let start = std::env::args_os().nth(1).map(PathBuf::from).filter(|p| p.is_dir());
 
     let mut application = Application::new();
@@ -64,7 +63,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })
         .run(move |cx| {
             pane_shell::init_com();
-            let host = ScriptHost::new(&cx.ui.runtime, ui_dir.join("app.luau")).app_id("pane");
+            let host = script_host(&cx.ui.runtime).app_id("pane");
             // `ui.window.titlebar_area` / `controls`: the tab strip stays clear
             // of Windows' caption buttons under the inset title bar.
             host.window_chrome(cx.window_info.titlebar_area.clone(), cx.window_info.controls.clone());
@@ -507,6 +506,20 @@ fn flag(arg: &Value, name: &str) -> bool {
 }
 
 /// The Luau UI: beside the executable in a release, the source tree in development.
+/// The interface. A release build carries it (build.rs compiles ui/ into
+/// the exe); a debug build reads ui/ and reloads a script when it's saved.
+#[cfg(not(debug_assertions))]
+fn script_host(runtime: &zgx::reactive::Runtime) -> ScriptHost {
+    static UI: zgx_script::Bundle = zgx_script::include_bundle!("ui");
+    ScriptHost::bundled(runtime, &UI, "app.luau")
+}
+
+#[cfg(debug_assertions)]
+fn script_host(runtime: &zgx::reactive::Runtime) -> ScriptHost {
+    ScriptHost::new(runtime, ui_dir().join("app.luau"))
+}
+
+#[cfg(debug_assertions)]
 fn ui_dir() -> PathBuf {
     if let Some(dir) = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.join("ui")))
         && dir.join("app.luau").exists()

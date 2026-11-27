@@ -73,7 +73,7 @@ mod tests {
     fn the_built_in_payload_has_pane() {
         let files = unpack(PACKED).unwrap();
         let names: Vec<&str> = files.iter().map(|f| f.name.as_str()).collect();
-        for want in ["pane.exe", "pane-scan-service.exe", "ui/app.luau", "ui/theme.luau", "LICENSE.txt"] {
+        for want in ["pane.exe", "pane-scan-service.exe", "dxcompiler.dll", "LICENSE.txt"] {
             assert!(names.contains(&want), "{want} missing from {names:?}");
         }
     }

@@ -1,6 +1,12 @@
-//! Embeds Pane's icon and version information into pane.exe.
+//! Embeds Pane's icon and version information into pane.exe, and in a
+//! release build its interface: the scripts in ui/, compiled to Luau
+//! bytecode (a script that doesn't parse fails the build), with the images
+//! they show. A debug build reads ui/ from the disk and reloads it on save.
 
 fn main() {
+    if std::env::var("PROFILE").as_deref() == Ok("release") {
+        zgx_script::build::bundle("../../ui", "ui").expect("bundle ui/ into pane.exe");
+    }
     println!("cargo:rerun-if-changed=pane.rc");
     println!("cargo:rerun-if-changed=../../assets/pane.ico");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {

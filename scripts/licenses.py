@@ -48,6 +48,7 @@ lines = [
     "",
     "return {",
     '\t{ name = "Geist Mono (font)", version = "", license = "OFL-1.1" },',
+    '\t{ name = "DirectX Shader Compiler (dxcompiler.dll)", version = "1.8.2502", license = "NCSA AND MIT" },',
 ]
 lines += [f"\t{{ name = {lua(n)}, version = {lua(v)}, license = {lua(l)} }}," for n, v, l in crates]
 lines.append("}")

@@ -387,20 +387,39 @@ pub fn load(app: &AppRef, index: usize, keep_selection: bool) {
         return;
     }
 
-    let (tx, rx) = futures_channel::oneshot::channel();
+    let (tx, mut rx) = futures_channel::mpsc::unbounded::<Listed>();
     let worker_location = location.clone();
     std::thread::spawn(move || {
-        let _ = tx.send(list_location(&worker_location, opts));
+        // A navigation into a huge folder shows its first rows while the
+        // rest is read; a refresh keeps the rows on screen until it's done.
+        let early_tx = tx.clone();
+        let early = move |listing: Listing| {
+            let _ = early_tx.unbounded_send(Listed::Early(listing));
+        };
+        let early: Option<&dyn Fn(Listing)> = if keep_selection { None } else { Some(&early) };
+        let _ = tx.unbounded_send(Listed::Done(list_location(&worker_location, opts, early)));
     });
 
     let app = app.clone();
     let tasks = app.borrow().tasks.clone();
     tasks.spawn(async move {
-        let Ok(result) = rx.await else { return };
+        // Whether the first rows were shown (and could have been selected).
+        let mut early_shown = false;
+        let result = loop {
+            let Some(listed) = rx.next().await else { return };
+            let Some(index) = app.borrow().tabs.iter().position(|t| t.id == tab_id) else { return };
+            if app.borrow().tabs[index].generation != generation {
+                return;
+            }
+            match listed {
+                Listed::Done(result) => break result,
+                Listed::Early(listing) => {
+                    show_early(&app, index, &location, listing);
+                    early_shown = true;
+                }
+            }
+        };
         let Some(index) = app.borrow().tabs.iter().position(|t| t.id == tab_id) else { return };
-        if app.borrow().tabs[index].generation != generation {
-            return;
-        }
         let publish_start = Instant::now();
         let (count, took) = {
             let mut a = app.borrow_mut();
@@ -411,7 +430,7 @@ pub fn load(app: &AppRef, index: usize, keep_selection: bool) {
                     let rows: Vec<Value> = listing.texts.iter().map(RowText::value).collect();
                     let old_names: Vec<String> = tab.entries.iter().map(|e| e.name.clone()).collect();
                     let new_names: Vec<&str> = listing.entries.iter().map(|e| e.name.as_str()).collect();
-                    tab.selection = if keep_selection {
+                    tab.selection = if keep_selection || early_shown {
                         tab.selection.remap(&old_names, &new_names)
                     } else {
                         Selection::default()
@@ -467,7 +486,56 @@ pub fn load(app: &AppRef, index: usize, keep_selection: bool) {
     });
 }
 
-fn list_location(location: &Location, opts: ListOptions) -> Result<Listing, String> {
+/// What the listing worker sends: a huge folder's first rows, then all.
+enum Listed {
+    Early(Listing),
+    Done(Result<Listing, String>),
+}
+
+/// How many entries a folder needs before its first rows are shown early.
+const EARLY_ROWS: usize = 1000;
+
+/// Shows a huge folder's first rows while the rest is still being read.
+/// The tab stays loading: no folder sizes or group headers yet.
+fn show_early(app: &AppRef, index: usize, location: &Location, listing: Listing) {
+    let took = listing.took;
+    let publish_start = Instant::now();
+    {
+        let mut a = app.borrow_mut();
+        let tab = &mut a.tabs[index];
+        tab.rows = Value::List(listing.texts.iter().map(RowText::value).collect());
+        tab.error = None;
+        tab.entries = listing.entries;
+        tab.roots.clear();
+        if let Some(folder) = location.folder() {
+            let keys: Vec<String> = listing.texts.into_iter().map(|t| t.icon).collect();
+            let size = icon_size(&a.tabs[index].view);
+            a.icons.request_entries(folder, &a.tabs[index].entries, &keys, size);
+        }
+    }
+    if index == app.borrow().active {
+        publish_rows(app);
+        eprintln!(
+            "[pane] {}: first {} rows · listed in {:.1} ms · published in {:.1} ms",
+            location.address(),
+            app.borrow().tabs[index].entries.len(),
+            took.as_secs_f64() * 1e3,
+            publish_start.elapsed().as_secs_f64() * 1e3
+        );
+    }
+}
+
+/// A folder's entries filtered, sorted and turned into row texts.
+fn folder_listing(mut entries: Vec<Entry>, dir: &Path, opts: &ListOptions, started: Instant) -> Listing {
+    entries.retain(|e| (opts.show_hidden || !e.hidden) && (opts.show_system || !(e.system && e.hidden)));
+    pane_fs::sort_entries(&mut entries, opts.sort);
+    let texts = entries.iter().map(|e| row_text(e, dir, opts, false)).collect();
+    Listing { entries, roots: Vec::new(), texts, took: started.elapsed() }
+}
+
+/// Lists `location`. With `early`, a folder of more than [`EARLY_ROWS`]
+/// entries also hands it its first ones, sorted, while the rest is read.
+fn list_location(location: &Location, opts: ListOptions, early: Option<&dyn Fn(Listing)>) -> Result<Listing, String> {
     let started = Instant::now();
     match location {
         // The Overview has no listing: storage.rs publishes its contents.
@@ -514,11 +582,14 @@ fn list_location(location: &Location, opts: ListOptions) -> Result<Listing, Stri
             Ok(Listing { entries, roots, texts, took: started.elapsed() })
         }
         Location::Folder(dir) => {
-            let mut entries = pane_fs::list_dir(dir).map_err(|e| friendly_error(dir, &e))?;
-            entries.retain(|e| (opts.show_hidden || !e.hidden) && (opts.show_system || !(e.system && e.hidden)));
-            pane_fs::sort_entries(&mut entries, opts.sort);
-            let texts = entries.iter().map(|e| row_text(e, dir, &opts, false)).collect();
-            Ok(Listing { entries, roots: Vec::new(), texts, took: started.elapsed() })
+            let first = if early.is_some() { EARLY_ROWS } else { usize::MAX };
+            let entries = pane_fs::list_dir_early(dir, first, |first| {
+                if let Some(early) = early {
+                    early(folder_listing(first.to_vec(), dir, &opts, started));
+                }
+            })
+            .map_err(|e| friendly_error(dir, &e))?;
+            Ok(folder_listing(entries, dir, &opts, started))
         }
     }
 }
@@ -1226,7 +1297,7 @@ pub fn refresh_places(app: &AppRef) {
         let drives: Vec<Value> = drives
             .iter()
             .map(|d| {
-                let used = if d.total > 0 { (d.total - d.free) as f64 / d.total as f64 } else { 0.0 };
+                let used = used_share(d.total.saturating_sub(d.free), d.total);
                 let (detail, free, of) = if d.total > 0 {
                     (
                         format!("{} free of {}", pane_fs::format_size(d.free), pane_fs::format_size(d.total)),
@@ -1292,7 +1363,10 @@ fn publish_rows(app: &AppRef) {
 /// first in a folder (not search results, This PC or the Overview).
 fn publish_groups(a: &App) {
     let tab = a.tab();
-    let grouped = a.settings.folders_first && matches!(tab.history.current, Location::Folder(_)) && !tab.entries.is_empty();
+    let grouped = a.settings.folders_first
+        && matches!(tab.history.current, Location::Folder(_))
+        && !tab.entries.is_empty()
+        && !tab.loading;
     if !grouped {
         a.out.groups.set(Value::Nil);
         return;
@@ -1516,6 +1590,17 @@ fn used_of(used: u64, total: u64) -> String {
     }
 }
 
+/// How full a drive is, 0..1, in thousandths: free space moves by a few
+/// bytes all the time, and the sidebar's drives are read again every 15 s.
+/// Rounded, a reading that changes nothing visible publishes nothing, so
+/// the meters don't animate (and the window doesn't draw) while idle.
+fn used_share(used: u64, total: u64) -> f64 {
+    if total == 0 {
+        return 0.0;
+    }
+    (used as f64 / total as f64 * 1000.0).round() / 1000.0
+}
+
 // ---------------------------------------------------------------- helpers
 
 pub fn start_location(settings: &Settings, home: &Path) -> Location {
@@ -1708,6 +1793,16 @@ mod tests {
         assert_eq!(kind_name("", "notes"), "File");
         assert_eq!(kind_name("xyz", "a.xyz"), "XYZ file");
         assert_eq!(kind_name("29c7101d5650", "a.tmp.29c7101d5650"), "File");
+    }
+
+    #[test]
+    fn used_share_ignores_small_changes() {
+        const GB: u64 = 1 << 30;
+        assert_eq!(used_share(0, 0), 0.0);
+        assert_eq!(used_share(300 * GB, 476 * GB), 0.63);
+        // A few megabytes written meanwhile: the same share.
+        assert_eq!(used_share(300 * GB + (5 << 20), 476 * GB), 0.63);
+        assert_eq!(used_share(476 * GB, 476 * GB), 1.0);
     }
 
     #[test]
