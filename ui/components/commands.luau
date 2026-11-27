@@ -14,7 +14,7 @@ local function what(): string
 	local sel = state.sel:peek()
 	if sel.count == 1 then
 		for id in sel.ids do
-			return `"{id}"`
+			return `"{state.display_name(id)}"`
 		end
 	end
 	return `{sel.count} items`
@@ -23,6 +23,11 @@ end
 -- Delete / Shift+Delete: to the Recycle Bin, or permanently after asking.
 function M.delete(shift: boolean?)
 	if not in_folder() or state.sel:peek().count == 0 then
+		return
+	end
+	-- In the Recycle Bin, deleting is for good.
+	if state.nav:peek() and (state.nav:peek() :: any).recycle then
+		M.purge()
 		return
 	end
 	local permanent = shift == true or state.setting("delete_permanently") == true
@@ -58,6 +63,31 @@ function M.new_folder()
 	if in_folder() then
 		ui.invoke("new_folder")
 	end
+end
+
+-- The Recycle Bin: put the selection back where it was, or delete it for
+-- good (after asking), or empty the whole bin (Windows asks).
+function M.restore()
+	if state.sel:peek().count > 0 then
+		ui.invoke("restore")
+	end
+end
+
+function M.purge()
+	if state.sel:peek().count == 0 then
+		return
+	end
+	confirm.ask {
+		title = "Delete permanently?",
+		body = `{what()} will be deleted for good. This can't be undone.`,
+		label = "Delete permanently",
+		danger = true,
+		action = "purge",
+	}
+end
+
+function M.empty_bin()
+	ui.invoke("empty_recycle_bin")
 end
 
 -- An empty file from the New menu: "text" or "markdown".

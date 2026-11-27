@@ -306,8 +306,13 @@ local function path_pill(): Node
 			color = "$accent",
 			ui.switch(function()
 				local n = state.nav:get()
-				return if n and n.overview then "overview" elseif n and n.this_pc then "computer" else "folder"
+				return if n and n.overview
+					then "overview"
+					elseif n and n.this_pc then "computer"
+					elseif n and n.recycle then "trash"
+					else "folder"
 			end, {
+				trash = icons.icon("trash", 15),
 				overview = icons.icon("overview", 15),
 				computer = icons.icon("computer", 15),
 				folder = icons.icon("folder", 15),
@@ -568,12 +573,67 @@ local function folder_commands(): Node
 	}
 end
 
+-- In the Recycle Bin: Restore and Delete permanently for the selection
+-- (Empty Recycle Bin is on the right).
+local function recycle_commands(): Node
+	return ui.row {
+		gap = 6,
+		items = "center",
+		ui.show(function()
+			return state.sel:get().count > 0
+		end, ui.row {
+			gap = 2,
+			items = "center",
+			selection_chip(),
+			ui.div { w = 1, h = 18, bg = "$border.subtle", mx = 6 },
+			text_button {
+				label = "Restore",
+				icon = "back",
+				primary = true,
+				tooltip = function()
+					return "Put back where it was deleted from"
+				end,
+				on_click = commands.restore,
+			},
+			text_button {
+				label = "Delete permanently",
+				icon = "trash",
+				danger = true,
+				tooltip = function()
+					return "Delete for good (Delete)"
+				end,
+				on_click = commands.purge,
+			},
+		}),
+	}
+end
+
+-- The Recycle Bin's own command, on the command row's right beside Sort
+-- (nothing goes above the sidebar): while it holds anything and nothing is
+-- selected.
+local function empty_bin_button(): Node
+	return ui.show(function()
+		local n = state.nav:get()
+		return n ~= nil and n.recycle == true and state.sel:get().count == 0 and state.rows:len() > 0
+	end, text_button {
+		label = "Empty Recycle Bin",
+		icon = "trash",
+		danger = true,
+		tooltip = function()
+			return "Delete everything in it for good"
+		end,
+		on_click = commands.empty_bin,
+	})
+end
+
 -- The command row's left side: the selection's commands, or the folder's.
 local function command_row_left(): Node
 	return ui.switch(function()
 		local n = state.nav:get()
 		if n == nil or n.this_pc then
 			return "none"
+		elseif n.recycle then
+			return "recycle"
 		elseif state.sel:get().count > 0 then
 			return "selection"
 		elseif n.search then
@@ -584,6 +644,7 @@ local function command_row_left(): Node
 	end, {
 		selection = selection_commands(),
 		folder = folder_commands(),
+		recycle = recycle_commands(),
 		none = ui.div {},
 	})
 end
@@ -735,7 +796,7 @@ return function(): Node
 			path_pill(),
 			ui.show(function()
 				local n = state.nav:get()
-				return n ~= nil and not n.overview and not n.this_pc
+				return n ~= nil and not n.overview and not n.this_pc and not n.recycle
 			end, search_box()),
 			more_menu(),
 		},
@@ -757,8 +818,9 @@ return function(): Node
 				-- New: in a folder (not This PC or search results).
 				ui.show(function()
 					local n = state.nav:get()
-					return n ~= nil and not n.this_pc and not n.search
+					return n ~= nil and not n.this_pc and not n.search and not n.recycle
 				end, new_menu()),
+				empty_bin_button(),
 				sort_menu(),
 				view_switch(),
 				common.icon_button {

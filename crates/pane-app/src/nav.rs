@@ -5,6 +5,7 @@ use std::path::{Component, Path, PathBuf};
 
 pub const THIS_PC: &str = "::thispc";
 pub const OVERVIEW: &str = "::overview";
+pub const RECYCLE_BIN: &str = "::recycle";
 /// "::search|<root>|<query>" (a path never holds "|").
 const SEARCH: &str = "::search|";
 
@@ -14,6 +15,8 @@ pub enum Location {
     Overview,
     /// The drives, as Explorer's "This PC".
     ThisPc,
+    /// What's in the Recycle Bin, on every drive (pane_shell::recycle).
+    RecycleBin,
     Folder(PathBuf),
     /// Search results: what's under `root` whose name matches `query`.
     Search { root: PathBuf, query: String },
@@ -25,6 +28,7 @@ impl Location {
         match s {
             THIS_PC => Location::ThisPc,
             OVERVIEW => Location::Overview,
+            RECYCLE_BIN => Location::RecycleBin,
             _ => match s.strip_prefix(SEARCH).and_then(|rest| rest.split_once('|')) {
                 Some((root, query)) => Location::Search { root: PathBuf::from(root), query: query.into() },
                 None => Location::Folder(PathBuf::from(s)),
@@ -37,6 +41,7 @@ impl Location {
         match self {
             Location::ThisPc => THIS_PC.into(),
             Location::Overview => OVERVIEW.into(),
+            Location::RecycleBin => RECYCLE_BIN.into(),
             Location::Folder(p) => p.display().to_string(),
             Location::Search { root, query } => format!("{SEARCH}{}|{query}", root.display()),
         }
@@ -46,7 +51,7 @@ impl Location {
     pub fn folder(&self) -> Option<&Path> {
         match self {
             Location::Folder(p) | Location::Search { root: p, .. } => Some(p),
-            Location::ThisPc | Location::Overview => None,
+            Location::ThisPc | Location::Overview | Location::RecycleBin => None,
         }
     }
 
@@ -56,6 +61,7 @@ impl Location {
         match self {
             Location::ThisPc => "This PC".into(),
             Location::Overview => "Overview".into(),
+            Location::RecycleBin => "Recycle Bin".into(),
             Location::Folder(p) => match p.file_name() {
                 Some(name) => name.to_string_lossy().into_owned(),
                 None => p.display().to_string().trim_end_matches('\\').to_string(),
@@ -69,6 +75,7 @@ impl Location {
         match self {
             Location::ThisPc => "This PC".into(),
             Location::Overview => "Overview".into(),
+            Location::RecycleBin => "Recycle Bin".into(),
             Location::Folder(p) | Location::Search { root: p, .. } => p.display().to_string(),
         }
     }
@@ -76,7 +83,7 @@ impl Location {
     /// One level up: a drive's root goes to This PC.
     pub fn parent(&self) -> Option<Location> {
         match self {
-            Location::ThisPc | Location::Overview => None,
+            Location::ThisPc | Location::Overview | Location::RecycleBin => None,
             // Up from search results: the folder searched.
             Location::Search { root, .. } => Some(Location::Folder(root.clone())),
             Location::Folder(p) => Some(match p.parent() {
@@ -90,6 +97,9 @@ impl Location {
     pub fn crumbs(&self) -> Vec<(String, Location)> {
         if *self == Location::Overview {
             return vec![("Overview".to_string(), Location::Overview)];
+        }
+        if *self == Location::RecycleBin {
+            return vec![("Recycle Bin".to_string(), Location::RecycleBin)];
         }
         let mut out = vec![("This PC".to_string(), Location::ThisPc)];
         let path = match self {
@@ -180,6 +190,9 @@ pub fn parse_address(text: &str, current: &Location, home: &Path) -> Option<Loca
     if text.eq_ignore_ascii_case("overview") || text.eq_ignore_ascii_case("storage") {
         return Some(Location::Overview);
     }
+    if text.eq_ignore_ascii_case("recycle bin") || text.eq_ignore_ascii_case("shell:RecycleBinFolder") {
+        return Some(Location::RecycleBin);
+    }
     let expanded = expand_env(text);
     let mut path = if expanded == "~" {
         home.to_path_buf()
@@ -249,6 +262,19 @@ fn normalize(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_recycle_bin_is_a_place_of_its_own() {
+        let bin = Location::RecycleBin;
+        assert_eq!(Location::from_ui(&bin.to_ui()), bin);
+        assert_eq!(bin.title(), "Recycle Bin");
+        assert_eq!(bin.parent(), None);
+        assert_eq!(bin.folder(), None, "nothing is made or pasted there");
+        assert_eq!(bin.crumbs(), vec![("Recycle Bin".to_string(), Location::RecycleBin)]);
+        let here = Location::ThisPc;
+        assert_eq!(parse_address("Recycle Bin", &here, Path::new(r"C:\Users\me")), Some(Location::RecycleBin));
+        assert_eq!(parse_address("shell:RecycleBinFolder", &here, Path::new(r"C:\Users\me")), Some(Location::RecycleBin));
+    }
 
     fn folder(s: &str) -> Location {
         Location::Folder(PathBuf::from(s))

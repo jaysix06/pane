@@ -241,8 +241,8 @@ local function drive_row(place: state.Place): Node
 	}
 end
 
--- The Recycle Bin: how full it is; a click opens it in File Explorer
--- (which restores from it), files dropped on it go there.
+-- The Recycle Bin: how full it is; a click opens it in a tab (restore or
+-- delete for good there), files dropped on it go there.
 local function recycle_info(): any
 	local p = state.places:get()
 	return if p then (p :: any).recycle else nil
@@ -259,9 +259,7 @@ local function recycle_row(): Node
 			row {
 				label = "Recycle Bin",
 				path = "::recycle",
-				here = function()
-					return false
-				end,
+				here = state.in_recycle,
 				icon = ui.div { color = "$text.secondary", icons.icon("trash", 18) },
 				h = 44,
 				extra = ui.text {
@@ -275,13 +273,19 @@ local function recycle_row(): Node
 					truncate = true,
 				},
 				on_open = function()
-					ui.invoke("open_recycle_bin")
+					ui.invoke("navigate", "::recycle")
 				end,
 				on_paths = function(paths: { string })
 					ui.invoke("recycle", { paths = paths })
 				end,
 				menu = function()
 					local items = {
+						ui.menu_item {
+							"Open in new tab",
+							on_click = function()
+								ui.invoke("navigate_new_tab", "::recycle")
+							end,
+						},
 						ui.menu_item {
 							"Open in File Explorer",
 							on_click = function()

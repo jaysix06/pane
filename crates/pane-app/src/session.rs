@@ -58,7 +58,7 @@ impl Session {
         for (i, tab) in self.tabs.into_iter().enumerate() {
             let ok = match Location::from_ui(&tab.location) {
                 Location::Folder(p) | Location::Search { root: p, .. } => exists(&p),
-                Location::ThisPc | Location::Overview => true,
+                Location::ThisPc | Location::Overview | Location::RecycleBin => true,
             };
             if ok {
                 if i <= self.active {

@@ -84,7 +84,8 @@ impl Tab {
     /// The full path of row `i`.
     pub fn path_of(&self, i: usize) -> Option<PathBuf> {
         match &self.history.current {
-            Location::ThisPc => self.roots.get(i).cloned(),
+            // The drive's root; in the bin, the item itself ($R...).
+            Location::ThisPc | Location::RecycleBin => self.roots.get(i).cloned(),
             Location::Overview => None,
             // A search result's name is its path below the folder searched.
             Location::Folder(dir) | Location::Search { root: dir, .. } => {
@@ -633,6 +634,7 @@ fn list_location(location: &Location, opts: ListOptions, early: Option<&dyn Fn(L
         Location::Overview | Location::Search { .. } => {
             Ok(Listing { entries: Vec::new(), roots: Vec::new(), texts: Vec::new(), took: started.elapsed() })
         }
+        Location::RecycleBin => Ok(recycle_listing(pane_shell::recycle::list(), &opts, started)),
         Location::ThisPc => {
             let drives = pane_shell::drives();
             let mut entries = Vec::new();
@@ -688,6 +690,69 @@ fn list_location(location: &Location, opts: ListOptions, early: Option<&dyn Fn(L
             Ok(folder_listing(entries, dir, &opts, started))
         }
     }
+}
+
+/// The Recycle Bin's rows, sorted as the tab sorts: the name each item had,
+/// the folder it was in (in Kind's place), when it was deleted (in Date
+/// modified's) and its size. An entry's name is "<name>\u{1}<$R path>":
+/// sorted and typed-to by its own name, unique however many share it.
+/// `roots` holds the items themselves.
+fn recycle_listing(items: Vec<pane_shell::recycle::Recycled>, opts: &ListOptions, started: Instant) -> Listing {
+    let mut entries: Vec<Entry> = items
+        .iter()
+        .map(|r| Entry {
+            name: format!("{}\u{1}{}", r.name(), r.data.display()),
+            is_dir: r.is_dir,
+            size: r.size,
+            modified: r.deleted,
+            hidden: false,
+            system: false,
+        })
+        .collect();
+    pane_fs::sort_entries(&mut entries, opts.sort);
+    let by_data: std::collections::HashMap<String, &pane_shell::recycle::Recycled> =
+        items.iter().map(|r| (r.data.display().to_string(), r)).collect();
+    let mut roots = Vec::with_capacity(entries.len());
+    let mut texts = Vec::with_capacity(entries.len());
+    for e in &entries {
+        let data = e.name.split_once('\u{1}').map(|(_, d)| d).unwrap_or_default();
+        let Some(r) = by_data.get(data) else { continue };
+        let shown = r.name();
+        let ext = e.extension();
+        let hide_ext = !opts.show_extensions && !e.is_dir && !ext.is_empty() && shown.len() > ext.len() + 1;
+        let local = pane_fs::date::local_time(r.deleted);
+        let date_full = local.map(|t| pane_fs::date::absolute(&t)).unwrap_or_default();
+        let date = match (local, opts.now) {
+            (Some(then), Some(now)) if opts.relative_dates => pane_fs::date::relative(&then, &now),
+            _ => date_full.clone(),
+        };
+        texts.push(RowText {
+            id: e.name.clone(),
+            name: if hide_ext { shown[..shown.len() - ext.len() - 1].to_string() } else { shown.clone() },
+            dir: r.is_dir,
+            kind: r.from().display().to_string(),
+            date,
+            date_full,
+            recent: false,
+            ext: if hide_ext { ext } else { String::new() },
+            size: if r.is_dir && r.size == 0 { String::new() } else { pane_fs::format_size(r.size) },
+            icon: format!("p:{}", r.data.display()),
+            thumb: String::new(),
+        });
+        roots.push(r.data.clone());
+    }
+    Listing { entries, roots, texts, took: started.elapsed() }
+}
+
+/// The items selected in the Recycle Bin, read again from their records.
+pub fn selected_recycled(app: &AppRef) -> Vec<pane_shell::recycle::Recycled> {
+    let a = app.borrow();
+    let tab = a.tab();
+    if tab.history.current != Location::RecycleBin {
+        return Vec::new();
+    }
+    let wanted: std::collections::HashSet<PathBuf> = tab.selected_paths().into_iter().collect();
+    pane_shell::recycle::list().into_iter().filter(|r| wanted.contains(&r.data)).collect()
 }
 
 /// A row's texts. `search`: the entry's name is a path below `dir`; the row
@@ -912,6 +977,10 @@ pub fn go_to_address(app: &AppRef, text: &str) {
 /// Opens row `i`: a folder or drive in this tab (or a new one), a file
 /// with its app.
 pub fn open_row(app: &AppRef, i: usize, new_tab: bool) {
+    if app.borrow().tab().history.current == Location::RecycleBin {
+        app.borrow().toast("Restore it to open it.");
+        return;
+    }
     let (path, is_dir) = {
         let a = app.borrow();
         let tab = a.tab();
@@ -1164,7 +1233,7 @@ pub fn set_view(app: &AppRef, view: &str) {
                 let keys: Vec<String> = tab.entries.iter().map(|e| icons::key_for(e, dir)).collect();
                 a.icons.request_entries(dir, &tab.entries, &keys, Size::Large);
             }
-            Location::ThisPc | Location::Overview => {
+            Location::ThisPc | Location::Overview | Location::RecycleBin => {
                 for root in &tab.roots {
                     a.icons.request(&format!("p:{}", root.display()), root, Size::Large);
                 }
@@ -1379,7 +1448,7 @@ fn ensure_watch(app: &AppRef) {
         // A zip's folders aren't on disk to watch.
         Location::Folder(p) if pane_fs::zip::split(p).is_some() => None,
         Location::Folder(p) => Some(p.clone()),
-        Location::ThisPc | Location::Overview | Location::Search { .. } => None,
+        Location::ThisPc | Location::Overview | Location::Search { .. } | Location::RecycleBin => None,
     };
     if a.watcher.as_ref().map(|(p, _)| p) == wanted.as_ref() {
         return;
@@ -1648,6 +1717,7 @@ fn publish_nav(app: &AppRef) {
         ),
         ("this_pc", Value::from(matches!(location, Location::ThisPc))),
         ("overview", Value::from(matches!(location, Location::Overview))),
+        ("recycle", Value::from(matches!(location, Location::RecycleBin))),
         ("sort", Value::from(sort)),
         ("descending", Value::from(tab.descending)),
         ("view", Value::from(tab.view.as_str())),
@@ -1745,7 +1815,7 @@ fn preview_item(tab: &Tab, i: usize) -> Option<preview::Item> {
     let path = match &tab.history.current {
         Location::Folder(dir) | Location::Search { root: dir, .. } => dir.join(&entry.name),
         Location::ThisPc => tab.roots.get(i)?.clone(),
-        Location::Overview => return None,
+        Location::Overview | Location::RecycleBin => return None,
     };
     let Value::List(rows) = &tab.rows else { return None };
     let row = rows.get(i)?;

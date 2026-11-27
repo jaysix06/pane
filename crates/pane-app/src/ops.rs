@@ -341,10 +341,70 @@ fn current_folder(app: &AppRef) -> Option<PathBuf> {
 }
 
 const READ_ONLY_ZIP: &str = "Pane opens zip files read-only: copy items out of it to change them.";
+const IN_RECYCLE_BIN: &str = "Restore it first: items in the Recycle Bin can only be restored or deleted.";
+
+fn in_recycle_bin(app: &AppRef) -> bool {
+    app.borrow().tab().history.current == Location::RecycleBin
+}
+
+// ---------------------------------------------------------------- recycle bin
+
+/// Puts the selected items back where they were deleted from ("name (2)"
+/// when that name is taken now), then shows how it went.
+pub fn restore(app: &AppRef) {
+    let items = app::selected_recycled(app);
+    if items.is_empty() {
+        return;
+    }
+    let mut restored: Vec<PathBuf> = Vec::new();
+    let mut failed: Vec<String> = Vec::new();
+    for item in &items {
+        match pane_shell::recycle::restore(item) {
+            Ok(to) => restored.push(to),
+            Err(e) => failed.push(format!("{}: {e}", item.name())),
+        }
+    }
+    app::select_none(app);
+    app::refresh(app);
+    app::refresh_places(app);
+    let a = app.borrow();
+    if let Some(first) = failed.first() {
+        a.toast(&if failed.len() == 1 { format!("Couldn't restore {first}") } else { format!("{} items couldn't be restored. {first}", failed.len()) });
+    } else if restored.len() == 1 {
+        a.toast(&format!("Restored to {}.", restored[0].display()));
+    } else {
+        a.toast(&format!("Restored {} items.", restored.len()));
+    }
+}
+
+/// Deletes the selected items for good (the UI has asked): what each holds
+/// and its record, as one operation with a progress card (a deleted folder
+/// can be big).
+pub fn purge(ops: &OpsRef, app: &AppRef) {
+    let items = app::selected_recycled(app);
+    if items.is_empty() {
+        return;
+    }
+    let label = format!(
+        "Deleting {} for good",
+        if items.len() == 1 { items[0].name() } else { count(items.len(), "item") }
+    );
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for item in &items {
+        paths.push(item.data.clone());
+        paths.push(item.info.clone());
+    }
+    app::select_none(app);
+    run(ops, app, Op::Delete { paths, permanent: true }, label, "delete", None);
+}
 
 // ---------------------------------------------------------------- actions
 
 pub fn copy(ops: &OpsRef, app: &AppRef, cut: bool) {
+    if in_recycle_bin(app) {
+        app.borrow().toast(IN_RECYCLE_BIN);
+        return;
+    }
     let mut paths = app.borrow().tab().selected_paths();
     if paths.is_empty() {
         return;
@@ -413,6 +473,13 @@ pub fn paste(ops: &OpsRef, app: &AppRef) {
 /// Deletes the selection: to the Recycle Bin, or for good with `permanent`
 /// (the UI has asked; `confirmed` says so).
 pub fn delete(ops: &OpsRef, app: &AppRef, permanent: bool, confirmed: bool) {
+    // In the bin, Delete is for good (the UI asks first).
+    if in_recycle_bin(app) {
+        if confirmed {
+            purge(ops, app);
+        }
+        return;
+    }
     if app::showing_zip(app) {
         app.borrow().toast(READ_ONLY_ZIP);
         return;
@@ -446,6 +513,10 @@ pub fn recycle(ops: &OpsRef, app: &AppRef, paths: Vec<PathBuf>) {
 }
 
 pub fn rename(ops: &OpsRef, app: &AppRef, index: usize, name: &str) {
+    if in_recycle_bin(app) {
+        app.borrow().toast(IN_RECYCLE_BIN);
+        return;
+    }
     if app::showing_zip(app) {
         app.borrow().toast(READ_ONLY_ZIP);
         return;

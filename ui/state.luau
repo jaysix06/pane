@@ -29,6 +29,8 @@ export type Nav = {
 	path: string,
 	this_pc: boolean,
 	overview: boolean,
+	-- The Recycle Bin: its items can be restored or deleted for good.
+	recycle: boolean?,
 	sort: string,
 	descending: boolean,
 	view: string,
@@ -144,6 +146,19 @@ function M.folder_info(id: string): any
 		return nil
 	end
 	return s.items[id]
+end
+
+-- Whether the tab shows the Recycle Bin.
+function M.in_recycle(): boolean
+	local n = M.nav:get()
+	return n ~= nil and n.recycle == true
+end
+
+-- A row's name as people know it: in the Recycle Bin an id is
+-- "<name>\u{1}<where it's kept>".
+function M.display_name(id: string): string
+	local cut = string.find(id, "\u{1}", 1, true)
+	return if cut then string.sub(id, 1, cut - 1) else id
 end
 
 function M.view(): string

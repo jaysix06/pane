@@ -5,6 +5,7 @@
 local state = require("../state")
 local theme = require("../theme")
 local common = require("./common")
+local commands = require("./commands")
 
 local motion = theme.motion(state.setting)
 
@@ -446,7 +447,7 @@ local function item_handlers(index: () -> number, row: () -> state.Row, whole: b
 		-- Drag out to other apps or onto folders; folders take drops and
 		-- spring open when a drag rests on them.
 		on_drag = function(): Drag?
-			if state.renaming:peek() ~= nil or dragging_select() then
+			if state.renaming:peek() ~= nil or dragging_select() or state.in_recycle() then
 				return nil
 			end
 			return drag_payload(row())
@@ -521,6 +522,23 @@ local function item_handlers(index: () -> number, row: () -> state.Row, whole: b
 		context_menu = function()
 			item_menu_claimed = true
 			ui.invoke("context_menu", index())
+			-- The Recycle Bin's items: Pane's own menu (Rust selected it).
+			if state.in_recycle() then
+				return {
+					ui.menu_item {
+						"Restore",
+						on_click = function()
+							ui.invoke("restore")
+						end,
+					},
+					ui.menu_item {
+						"Delete permanently",
+						on_click = function()
+							commands.purge()
+						end,
+					},
+				}
+			end
 			-- Explorer's own menu was shown natively: no zgx menu.
 			return nil
 		end,
@@ -738,7 +756,10 @@ end
 
 local function header_cell(label: string | () -> string, key: string, sized: boolean?, align: string?): Node
 	local button = ui.button {
-		label = if type(label) == "string" then `Sort by {label}` else "Sort by type",
+		label = function()
+			local text = if type(label) == "function" then label() else label
+			return `Sort by {text}`
+		end,
 		on_click = ui.action("sort", key),
 		w_full = sized == true,
 		grow = if sized then 0 else 1,
@@ -804,11 +825,13 @@ local function details_header(): Node
 			ui.invoke(if n > 0 and state.sel:peek().count == n then "select_none" else "select_all")
 		end, "Select all", false),
 		header_cell("Name", "name"),
-		header_cell("Date modified", "date", true),
+		header_cell(function()
+			return if state.in_recycle() then "Date deleted" else "Date modified"
+		end, "date", true),
 		-- Search results show where each one is instead.
 		header_cell(function()
 			local n = state.nav:get()
-			return if n and n.search then "Folder" else "Kind"
+			return if n and n.search then "Folder" elseif n and n.recycle then "Original location" else "Kind"
 		end, "type", true),
 		header_cell("Size", "size", true, "end"),
 	}
@@ -1429,6 +1452,9 @@ local function empty_or_error(): Node
 				if state.rows:len() > 0 then
 					return ""
 				end
+				if n and n.recycle then
+					return "The Recycle Bin is empty."
+				end
 				return if n and n.search then `Nothing here matches “{n.search}”.` else "This folder is empty."
 			end,
 			color = "$text.secondary",
@@ -1480,11 +1506,18 @@ return function(): Node
 		-- Files dropped on empty space land in this folder: from other apps,
 		-- or dragged in Pane from another folder (a folder that sprang open).
 		on_file_drop = function(files)
+			if state.in_recycle() then
+				ui.invoke("recycle", { paths = file_paths(files) })
+				return
+			end
 			drop_on(nil, file_paths(files))
 		end,
 		drop_when = function(payload: any)
 			if type(payload) ~= "table" or payload.paths == nil or not state.nav:peek() then
 				return false
+			end
+			if state.in_recycle() then
+				return true
 			end
 			local here = string.lower(state.nav:peek().path)
 			for _, p in payload.paths do
@@ -1496,6 +1529,10 @@ return function(): Node
 			return false
 		end,
 		on_drop = function(payload: Drag)
+			if state.in_recycle() then
+				ui.invoke("recycle", { paths = payload.paths })
+				return
+			end
 			drop_on(nil, payload.paths)
 		end,
 		-- A click on empty space clears the selection.

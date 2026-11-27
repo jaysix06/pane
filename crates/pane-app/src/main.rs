@@ -383,6 +383,10 @@ fn register_ops_actions(host: &ScriptHost, app: &AppRef, ops: &ops::OpsRef) {
     });
     // The sidebar's Recycle Bin: opened in File Explorer, and files dropped
     // on it ({ paths }) go there, as Delete sends them.
+    // In the Recycle Bin: put the selection back, or delete it for good
+    // (after the UI asked).
+    on("restore", |a, _, _| ops::restore(a));
+    on("purge", |a, o, _| ops::purge(o, a));
     on("open_recycle_bin", |a, _, _| {
         if !pane_shell::open_recycle_bin() {
             a.borrow().toast("File Explorer couldn't open the Recycle Bin.");
@@ -399,8 +403,9 @@ fn register_ops_actions(host: &ScriptHost, app: &AppRef, ops: &ops::OpsRef) {
     // selection when it is part of it).
     on("context_menu", |a, o, arg| {
         let Some(i) = index_arg(arg) else { return };
-        // Inside a zip there is nothing on disk for the shell's menu.
-        if app::showing_zip(a) {
+        // Inside a zip there is nothing on disk for the shell's menu; the
+        // Recycle Bin's items have their own (views.luau).
+        if app::showing_zip(a) || a.borrow().tab().history.current == Location::RecycleBin {
             app::ensure_selected(a, i);
             return;
         }
@@ -511,6 +516,7 @@ fn register_storage_actions(host: &ScriptHost, app: &AppRef, storage: &storage::
         if pane_shell::empty_recycle_bin(pane_shell::active_window()) {
             storage::recycle_bin_emptied(s);
             app::refresh_places(a);
+            app::refresh(a);
         }
     });
 }

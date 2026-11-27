@@ -19,6 +19,8 @@ mod log;
 #[cfg(windows)]
 mod places;
 #[cfg(windows)]
+pub mod recycle;
+#[cfg(windows)]
 mod win;
 
 #[cfg(windows)]
