@@ -235,6 +235,11 @@ impl App {
             ));
         }
         tasks.spawn(watch_loop(app.clone(), watch_rx));
+        let done = app.borrow().sizes.take_done();
+        if let Some(rx) = done {
+            tasks.spawn(sizes_done_loop(app.clone(), rx));
+        }
+        tasks.spawn(midnight_loop(app.clone()));
         tasks.spawn(places_loop(app.clone()));
         publish_tabs(&app);
         load(&app, active, false);
@@ -349,24 +354,108 @@ struct ListOptions {
     now_ft: u64,
 }
 
+/// How tab `index` lists and shows its rows, as the settings are now.
+fn list_options(a: &App, index: usize) -> ListOptions {
+    ListOptions {
+        sort: a.sort_options(&a.tabs[index]),
+        show_hidden: a.settings.show_hidden,
+        show_system: a.settings.show_system,
+        show_extensions: a.settings.show_extensions,
+        thumbnails: a.settings.thumbnails
+            && (a.settings.thumbnails_network
+                || !a.tabs[index].history.current.folder().is_some_and(pane_shell::is_network_path)),
+        relative_dates: a.settings.relative_dates,
+        now: pane_fs::date::local_time(pane_fs::date::now_filetime()),
+        now_ft: pane_fs::date::now_filetime(),
+    }
+}
+
+/// Builds tab `index`'s row texts again from its entries (dates seen from
+/// now), publishing them if it's on screen. Folders and search results only.
+fn rebuild_rows(app: &AppRef, index: usize) {
+    {
+        let mut a = app.borrow_mut();
+        let opts = list_options(&a, index);
+        let tab = &mut a.tabs[index];
+        let (dir, search) = match &tab.history.current {
+            Location::Folder(dir) => (dir.clone(), false),
+            Location::Search { root, .. } => (root.clone(), true),
+            _ => return,
+        };
+        if tab.loading {
+            return;
+        }
+        let rows: Vec<Value> = tab.entries.iter().map(|e| row_text(e, &dir, &opts, search).value()).collect();
+        tab.rows = Value::List(Rc::from(rows));
+    }
+    if index == app.borrow().active {
+        publish_rows(app);
+    }
+}
+
+/// Sorted by Size, a folder's subfolders go by what's inside them once
+/// sizes.rs knows every one (a listing sees folders as 0 bytes).
+fn sort_by_folder_sizes(app: &AppRef) {
+    let index = {
+        let mut a = app.borrow_mut();
+        let index = a.active;
+        let tab = &a.tabs[index];
+        let Location::Folder(dir) = &tab.history.current else { return };
+        if tab.sort != SortKey::Size || tab.loading {
+            return;
+        }
+        let Some(known) = a.sizes.known(dir) else { return };
+        let opts = a.sort_options(&a.tabs[index]);
+        let tab = &mut a.tabs[index];
+        let old: Vec<String> = tab.entries.iter().map(|e| e.name.clone()).collect();
+        pane_fs::sort_entries_by_size(&mut tab.entries, opts, |e| {
+            if e.is_dir { known.get(&e.name).copied().unwrap_or(0) } else { e.size }
+        });
+        let new: Vec<&str> = tab.entries.iter().map(|e| e.name.as_str()).collect();
+        if new.iter().zip(&old).all(|(n, o)| *n == o.as_str()) {
+            return;
+        }
+        tab.selection = tab.selection.remap(&old, &new);
+        index
+    };
+    rebuild_rows(app, index);
+}
+
+async fn sizes_done_loop(app: AppRef, mut rx: UnboundedReceiver<PathBuf>) {
+    while rx.next().await.is_some() {
+        sort_by_folder_sizes(&app);
+    }
+}
+
+/// Friendly dates ("Today", "Yesterday") change at midnight: every tab's
+/// rows are built again then.
+async fn midnight_loop(app: AppRef) {
+    loop {
+        let now = pane_fs::date::local_time(pane_fs::date::now_filetime());
+        let minutes_left = now.map_or(60, |t| 24 * 60 - (t.hour as u64 * 60 + t.minute as u64));
+        zgx::timer::sleep(Duration::from_secs(minutes_left.max(1) * 60 + 2)).await;
+        let later = pane_fs::date::local_time(pane_fs::date::now_filetime());
+        if now.map(|t| t.day) == later.map(|t| t.day) {
+            // Early (the minute had seconds left): look again shortly.
+            continue;
+        }
+        if !app.borrow().settings.relative_dates {
+            continue;
+        }
+        let tabs = app.borrow().tabs.len();
+        for i in 0..tabs {
+            rebuild_rows(&app, i);
+        }
+    }
+}
+
 /// (Re)lists tab `index`'s location in the background. With
 /// `keep_selection`, rows that still exist stay selected (a refresh or a
 /// change on disk); otherwise the selection is cleared (a navigation).
 pub fn load(app: &AppRef, index: usize, keep_selection: bool) {
     let (generation, tab_id, location, opts) = {
         let mut a = app.borrow_mut();
-        let opts = ListOptions {
-            sort: a.sort_options(&a.tabs[index]),
-            show_hidden: a.settings.show_hidden,
-            show_system: a.settings.show_system,
-            show_extensions: a.settings.show_extensions,
-            thumbnails: a.settings.thumbnails
-                && (a.settings.thumbnails_network
-                    || !a.tabs[index].history.current.folder().is_some_and(pane_shell::is_network_path)),
-            relative_dates: a.settings.relative_dates,
-            now: pane_fs::date::local_time(pane_fs::date::now_filetime()),
-            now_ft: pane_fs::date::now_filetime(),
-        };
+        let opts = list_options(&a, index);
         let tab = &mut a.tabs[index];
         tab.cancel_search();
         tab.generation += 1;
@@ -580,6 +669,13 @@ fn list_location(location: &Location, opts: ListOptions, early: Option<&dyn Fn(L
                 roots.push(d.root);
             }
             Ok(Listing { entries, roots, texts, took: started.elapsed() })
+        }
+        // Inside a zip file: its entries, read-only (pane_fs::zip).
+        Location::Folder(dir) if pane_fs::zip::split(dir).is_some() => {
+            let (archive, inner) = pane_fs::zip::split(dir).ok_or_else(|| format!("{} is gone.", dir.display()))?;
+            let entries = pane_fs::zip::list(&archive, &inner)
+                .map_err(|e| format!("Pane can't read {}: {e}", archive.display()))?;
+            Ok(folder_listing(entries, dir, &opts, started))
         }
         Location::Folder(dir) => {
             let first = if early.is_some() { EARLY_ROWS } else { usize::MAX };
@@ -799,6 +895,8 @@ pub fn go_to_address(app: &AppRef, text: &str) {
         parse_address(text, &a.tab().history.current, &a.home)
     };
     match parsed {
+        // Into a zip file, or a folder in one.
+        Some(Location::Folder(p)) if pane_fs::zip::split(&p).is_some() => navigate(app, Location::Folder(p)),
         Some(Location::Folder(p)) if !p.is_dir() => {
             if p.is_file() {
                 pane_shell::open_path(pane_shell::active_window(), &p);
@@ -821,11 +919,23 @@ pub fn open_row(app: &AppRef, i: usize, new_tab: bool) {
         let is_dir = matches!(tab.history.current, Location::ThisPc) || tab.entries.get(i).is_some_and(|e| e.is_dir);
         (path, is_dir)
     };
+    // A zip file opens as a folder, as Explorer's compressed folders do.
+    let is_dir = is_dir || (pane_fs::zip::is_zip_name(&path) && !in_zip(&path) && path.is_file());
     if is_dir {
         if new_tab || app.borrow().settings.open_folders_in_new_tab {
             new_tab_at(app, Location::Folder(path), !new_tab);
         } else {
             navigate(app, Location::Folder(path));
+        }
+    } else if in_zip(&path) {
+        // A file in a zip: taken out to a temporary folder, then opened.
+        match extract_from_zip(&path) {
+            Ok(out) => {
+                if !pane_shell::open_path(pane_shell::active_window(), &out) {
+                    app.borrow().toast(&format!("Couldn't open {}.", out.display()));
+                }
+            }
+            Err(e) => app.borrow().toast(&e),
         }
     } else if !pane_shell::open_path(pane_shell::active_window(), &path) {
         app.borrow().toast(&format!("Couldn't open {}.", path.display()));
@@ -972,6 +1082,26 @@ pub fn select_all(app: &AppRef) {
         a.tab_mut().selection.select_all(len);
     }
     publish_selection(app);
+}
+
+/// Drag-select: `begin` with whether to keep the selection, then each
+/// change of the rows the rectangle covers, then its end.
+pub fn marquee_begin(app: &AppRef, keep: bool) {
+    app.borrow_mut().tab_mut().selection.begin_marquee(keep);
+    publish_selection(app);
+}
+
+pub fn marquee(app: &AppRef, ranges: &[(usize, usize)]) {
+    {
+        let mut a = app.borrow_mut();
+        let len = a.tab().entries.len();
+        a.tab_mut().selection.marquee(ranges, len);
+    }
+    publish_selection(app);
+}
+
+pub fn marquee_end(app: &AppRef) {
+    app.borrow_mut().tab_mut().selection.end_marquee();
 }
 
 pub fn select_none(app: &AppRef) {
@@ -1125,6 +1255,23 @@ pub fn open_settings_folder(app: &AppRef) {
     }
 }
 
+/// Where a release build writes its messages: beside the settings.
+pub fn log_path() -> PathBuf {
+    crate::settings::Settings::default_path().with_file_name("pane.log")
+}
+
+/// Settings → Advanced → Log file: opens it (a debug build writes to the
+/// console instead, so there may be none).
+pub fn open_log() {
+    let path = log_path();
+    if path.exists() {
+        pane_shell::open_path(pane_shell::active_window(), &path);
+    } else if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+        pane_shell::open_path(pane_shell::active_window(), dir);
+    }
+}
+
 /// Settings → Advanced → Export: the settings, to a file the person chose.
 pub fn export_settings(app: &AppRef, path: &Path) {
     let a = app.borrow();
@@ -1205,9 +1352,32 @@ pub fn unpin(app: &AppRef, path: &str) {
 // ---------------------------------------------------------------- watching
 
 /// Watches the active tab's folder (and only it).
+/// Whether `path` is inside a zip file (not the zip file itself): a
+/// read-only folder of the archive's.
+pub fn in_zip(path: &Path) -> bool {
+    pane_fs::zip::split(path).is_some_and(|(archive, _)| archive != path)
+}
+
+/// Whether the active tab shows a folder inside a zip file.
+pub fn showing_zip(app: &AppRef) -> bool {
+    match &app.borrow().tab().history.current {
+        Location::Folder(p) => pane_fs::zip::split(p).is_some(),
+        _ => false,
+    }
+}
+
+/// Takes `path` (inside a zip) out to a temporary folder; where it went.
+pub fn extract_from_zip(path: &Path) -> Result<PathBuf, String> {
+    let (archive, inner) = pane_fs::zip::split(path).ok_or("It's not in a zip file.")?;
+    let dir = pane_fs::zip::temp_dir().map_err(|e| format!("Couldn't make a temporary folder: {e}"))?;
+    pane_fs::zip::extract(&archive, &inner, &dir).map_err(|e| format!("Couldn't take {} out of the zip: {e}", inner))
+}
+
 fn ensure_watch(app: &AppRef) {
     let mut a = app.borrow_mut();
     let wanted = match &a.tab().history.current {
+        // A zip's folders aren't on disk to watch.
+        Location::Folder(p) if pane_fs::zip::split(p).is_some() => None,
         Location::Folder(p) => Some(p.clone()),
         Location::ThisPc | Location::Overview | Location::Search { .. } => None,
     };
@@ -1244,11 +1414,23 @@ async fn watch_loop(app: AppRef, mut rx: UnboundedReceiver<PathBuf>) {
 
 // ---------------------------------------------------------------- sidebar
 
-/// Refreshes the sidebar's drives every 15 s (a USB stick plugged in).
+/// Refreshes the sidebar's drives as one arrives or goes (a USB stick
+/// plugged in: `WM_DEVICECHANGE`), and every minute for free space that
+/// other apps change (Pane's own copies read it again as they end).
 async fn places_loop(app: AppRef) {
+    let (tx, mut rx) = unbounded::<()>();
+    pane_shell::watch_devices(move || {
+        let _ = tx.unbounded_send(());
+    });
     loop {
         refresh_places(&app);
-        zgx::timer::sleep(Duration::from_secs(15)).await;
+        let timer = Box::pin(zgx::timer::sleep(Duration::from_secs(60)));
+        if let futures_util::future::Either::Right(_) = futures_util::future::select(timer, rx.next()).await {
+            // A device arrives as a burst of messages, and its volume
+            // mounts a moment after: wait, then read once.
+            zgx::timer::sleep(Duration::from_millis(800)).await;
+            while rx.try_recv().is_ok() {}
+        }
     }
 }
 
@@ -1357,6 +1539,8 @@ fn publish_rows(app: &AppRef) {
     drop(a);
     request_sizes(app);
     publish_selection(app);
+    // Sizes already known (a refresh of a measured folder): in order now.
+    sort_by_folder_sizes(app);
 }
 
 /// Folders and files as two groups in details view, when folders come
@@ -1387,7 +1571,14 @@ fn request_sizes(app: &AppRef) {
     let a = app.borrow();
     let tab = a.tab();
     let folder = match &tab.history.current {
-        Location::Folder(dir) if a.settings.folder_sizes && !tab.loading && !pane_shell::is_network_path(dir) => dir,
+        Location::Folder(dir)
+            if a.settings.folder_sizes
+                && !tab.loading
+                && !pane_shell::is_network_path(dir)
+                && pane_fs::zip::split(dir).is_none() =>
+        {
+            dir
+        }
         _ => {
             a.sizes.clear();
             return;
@@ -1686,6 +1877,7 @@ fn start_search(app: &AppRef, index: usize, generation: u64, tab_id: u64, root: 
             whole_name: a.settings.search_whole_name,
             hidden: a.settings.search_hidden,
             max_depth: a.settings.search_max_depth,
+            instant_drives: a.settings.search_instant_drives,
         };
         let cancel: search::Cancel = Default::default();
         let tab = &mut a.tabs[index];

@@ -462,6 +462,7 @@ local pages: { Page } = {
 			toggle("show_extensions", "Show file name extensions", "report.pdf rather than report."),
 			toggle("folders_first", "Folders first", "Folders above files, whatever the sort."),
 			toggle("natural_sort", "Sort numbers by value", "file2 before file10, as people count."),
+			toggle("item_checkboxes", "Item checkboxes", "A box on each item to select several without Ctrl."),
 			toggle("relative_dates", "Friendly dates", "Today 9:26 AM and Mon 10:37 PM rather than 11/26/2026 9:26 AM."),
 			toggle(
 				"folder_sizes",
@@ -521,6 +522,11 @@ local pages: { Page } = {
 			toggle("search_hidden", "Search hidden files and folders"),
 			toggle("search_case_sensitive", "Match case", "Report and report are different."),
 			toggle("search_whole_name", "Match whole names", "Otherwise any part of a name matches."),
+			toggle(
+				"search_instant_drives",
+				"Instant search of whole drives",
+				"Searching from a drive's root (C:\\) uses the instant scan service, when it's on."
+			),
 			pick("search_max_depth", "How deep to search", "Folders below the one searched.", {
 				{ label = "This folder only", value = 1 },
 				{ label = "2 levels", value = 2 },
@@ -580,6 +586,15 @@ local pages: { Page } = {
 				control = function()
 					return button("Open", function()
 						ui.invoke("open_settings_folder")
+					end)
+				end,
+			},
+			{
+				label = "Log file",
+				hint = "What Pane noted as it ran: errors, timings. Useful in a bug report.",
+				control = function()
+					return button("Open", function()
+						ui.invoke("open_log")
 					end)
 				end,
 			},

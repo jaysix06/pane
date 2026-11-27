@@ -246,6 +246,25 @@ return ui.column {
 	theme = theme.scope(state.setting),
 	bg = "$app.chrome",
 	on_key = on_key,
+	-- Drag-select keeps following the pointer outside the folder view.
+	on_pointer_move = function(e)
+		local f = state.root_pointer.move
+		if f then
+			f(e)
+		end
+	end,
+	on_release = function(e)
+		local f = state.root_pointer.release
+		if f then
+			f(e)
+		end
+	end,
+	on_hover = function(inside: boolean)
+		local f = state.root_pointer.release
+		if not inside and f then
+			f(nil)
+		end
+	end,
 	-- The mouse's back and forward buttons.
 	on_aux_click = function(e)
 		if e.button == 4 then

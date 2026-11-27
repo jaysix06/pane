@@ -35,9 +35,27 @@ end
 
 local DETAILS_ROW = 30
 local LIST_ROW = 26
-local COL_DATE = 170
-local COL_TYPE = 190
-local COL_SIZE = 140
+-- Date modified, Kind and Size have widths the header's handles drag
+-- (saved as settings); Name takes the rest.
+local COL_SETTING = { date = "col_date", type = "col_kind", size = "col_size" }
+local COL_DEFAULT = { date = 170, type = 190, size = 140 }
+local COL_MIN, COL_MAX = 60, 480
+-- The column being dragged and its width, until the setting is saved.
+local col_drag = ui.state("col_drag", nil :: { key: string, w: number }?)
+
+local function col_w(key: string): number
+	local d = col_drag:get()
+	if d and d.key == key then
+		return d.w
+	end
+	return state.setting(COL_SETTING[key]) or COL_DEFAULT[key]
+end
+
+local function col(key: string): () -> number
+	return function()
+		return col_w(key)
+	end
+end
 -- A group header ("FOLDERS 8 ── 5.0 GB") above the first folder and the
 -- first file, in details view.
 local GROUP_H = 30
@@ -46,13 +64,12 @@ local GROUP_MAX = 20000
 -- Name keeps at least this much: narrower, Type goes, then Date modified
 -- (the preview pane open in a small window). Size always stays.
 local NAME_MIN = 220
-local WITH_DATE = NAME_MIN + COL_DATE + COL_SIZE + 60
-local WITH_TYPE = WITH_DATE + COL_TYPE + 12
 
 local function column_hidden(column: string): () -> boolean
 	return function()
 		local w = state.view_w:get()
-		return if column == "type" then w < WITH_TYPE else w < WITH_DATE
+		local with_date = NAME_MIN + col_w("date") + col_w("size") + 60
+		return if column == "type" then w < with_date + col_w("type") + 12 else w < with_date
 	end
 end
 
@@ -92,13 +109,344 @@ end
 -- the folder's own menu as well. The item claims the click; the view skips it.
 local item_menu_claimed = false
 
--- What a press on an item does, shared by every layout.
-local function item_handlers(index: () -> number, row: () -> state.Row)
+-- A grid tile's width and height.
+local function tile_size(): (number, number)
+	local icon = state.setting("icon_size") or 64
+	return icon + 48, icon + 52
+end
+
+
+-- Drag-select ---------------------------------------------------------------
+-- A press on empty space (in details view, anywhere on a row but its icon
+-- and name, as in Explorer) and a drag draws a rectangle; the items it
+-- touches are selected. Ctrl or Shift keeps what was selected before. The
+-- list scrolls while the pointer is past its top or bottom edge.
+
+-- The list's scroll position, in points.
+local list_offset = ui.state("list_offset", 0)
+-- The folder view's column (the rectangle is drawn in it).
+local view_ref = ui.ref()
+-- The rectangle in list content points (x from the list's left, y from
+-- the top of its content), and where the list sits in the view column.
+type Rect = { x0: number, y0: number, x1: number, y1: number, top: number, left: number }
+local marquee = ui.state("marquee", nil :: Rect?)
+
+type Gesture = {
+	x0: number,
+	y0: number,
+	-- The pointer, in window points.
+	px: number,
+	py: number,
+	keep: boolean,
+	moved: boolean,
+	sent: string,
+	stop_scroll: (() -> ())?,
+}
+local gesture: Gesture? = nil
+-- An item's icon or name took this press: the list doesn't start a rectangle.
+local item_pressed = false
+-- A drag-select just ended: the click its release makes changes nothing.
+local swallow_click = false
+
+local function claim_press()
+	item_pressed = true
+end
+
+-- Whether a click should be ignored (it ended a drag-select).
+local function take_swallowed(): boolean
+	if swallow_click then
+		swallow_click = false
+		return true
+	end
+	return false
+end
+
+local function dragging_select(): boolean
+	return gesture ~= nil
+end
+
+local LIST_PY = 4
+local GRID_PY = 6
+local GRID_PX = 8
+
+local function list_rect(): { x: number, y: number, width: number, height: number }?
+	local el = state.list_ref:peek()
+	return if el then ui.window_rect(el) else nil
+end
+
+-- Details and list: where row `i` starts in the content (group headers
+-- make two rows taller), and the row at content point `y`.
+local function row_top(i: number, row_h: number, starts: { number }): number
+	local top = LIST_PY + (i - 1) * row_h
+	for _, s in starts do
+		if s < i then
+			top += GROUP_H
+		end
+	end
+	return top
+end
+
+local function group_starts(): { number }
+	local out = {}
+	if state.view() ~= "details" then
+		return out
+	end
+	local g = state.groups:peek()
+	local n = state.rows:len()
+	if g == nil or n > GROUP_MAX then
+		return out
+	end
+	if g.folders > 0 then
+		table.insert(out, 1)
+	end
+	if g.files > 0 and g.folders + 1 <= n then
+		table.insert(out, g.folders + 1)
+	end
+	return out
+end
+
+local function row_at(y: number, n: number, row_h: number, starts: { number }): number
+	local i = math.clamp(math.floor((y - LIST_PY) / row_h) + 1, 1, n)
+	while i > 1 and row_top(i, row_h, starts) > y do
+		i -= 1
+	end
+	while i < n and row_top(i + 1, row_h, starts) <= y do
+		i += 1
+	end
+	return i
+end
+
+-- The rows (from 1) the rectangle covers, as inclusive ranges.
+local function covered(r: Rect): { { number } }
+	local n = state.rows:len()
+	if n == 0 then
+		return {}
+	end
+	local xa, xb = math.min(r.x0, r.x1), math.max(r.x0, r.x1)
+	local ya, yb = math.min(r.y0, r.y1), math.max(r.y0, r.y1)
+	if state.view() == "grid" then
+		local tw, th = tile_size()
+		local cols = math.max(1, state.grid_cols:peek())
+		local rows = math.ceil(n / cols)
+		local pitch_y, pitch_x = th + 4, tw + 4
+		-- Rows and columns whose tiles the rectangle overlaps (the gaps
+		-- between tiles touch nothing).
+		local ra = math.max(1, math.floor((ya - GRID_PY) / pitch_y) + 1)
+		if ya - GRID_PY - (ra - 1) * pitch_y > th then
+			ra += 1
+		end
+		local rb = math.min(rows, math.floor((yb - GRID_PY) / pitch_y) + 1)
+		local ca = math.max(1, math.floor((xa - GRID_PX) / pitch_x) + 1)
+		if xa - GRID_PX - (ca - 1) * pitch_x > tw then
+			ca += 1
+		end
+		local cb = math.min(cols, math.floor((xb - GRID_PX) / pitch_x) + 1)
+		if yb < GRID_PY or xb < GRID_PX or ra > rb or ca > cb then
+			return {}
+		end
+		local out = {}
+		for row = ra, rb do
+			local a = (row - 1) * cols + ca
+			local b = math.min(n, (row - 1) * cols + cb)
+			if a <= b then
+				table.insert(out, { a, b })
+			end
+		end
+		return out
+	end
+	local row_h = if state.view() == "list" then LIST_ROW else DETAILS_ROW
+	local starts = group_starts()
+	local bottom = row_top(n + 1, row_h, starts)
+	if yb < LIST_PY or ya >= bottom then
+		return {}
+	end
 	return {
+		{ row_at(math.max(ya, LIST_PY), n, row_h, starts), row_at(math.min(yb, bottom - 1), n, row_h, starts) },
+	}
+end
+
+local function key_of(ranges: { { number } }): string
+	local parts = {}
+	for _, r in ranges do
+		table.insert(parts, `{r[1]}-{r[2]}`)
+	end
+	return table.concat(parts, ",")
+end
+
+-- The rectangle's far corner follows the pointer; the selection follows
+-- the rectangle.
+local function update(g: Gesture)
+	local rect = list_rect()
+	local m = marquee:peek()
+	if not rect or m == nil then
+		return
+	end
+	local x1 = math.clamp(g.px - rect.x, 0, rect.width)
+	local y1 = math.clamp(g.py - rect.y, 0, rect.height) + list_offset:peek()
+	local r = { x0 = m.x0, y0 = m.y0, x1 = x1, y1 = y1, top = m.top, left = m.left }
+	marquee:set(r)
+	local ranges = covered(r)
+	local k = key_of(ranges)
+	if k ~= g.sent then
+		g.sent = k
+		ui.invoke("marquee", { ranges = ranges })
+	end
+end
+
+local function finish(_e: any)
+	local g = gesture
+	gesture = nil
+	state.root_pointer.move = nil
+	state.root_pointer.release = nil
+	if not g then
+		return
+	end
+	if g.stop_scroll then
+		g.stop_scroll()
+	end
+	if g.moved then
+		marquee:set(nil)
+		ui.invoke("marquee_end")
+		-- Only the click this release makes, not a later one.
+		ui.after(50, function()
+			swallow_click = false
+		end)
+	end
+end
+
+local function follow(e: any)
+	local g = gesture
+	if not g then
+		return
+	end
+	g.px, g.py = e.x, e.y
+	if not g.moved then
+		local rect = list_rect()
+		if not rect then
+			return
+		end
+		local dx = (e.x - rect.x) - g.x0
+		local dy = (e.y - rect.y + list_offset:peek()) - g.y0
+		if math.abs(dx) < 4 and math.abs(dy) < 4 then
+			return
+		end
+		g.moved = true
+		-- Whatever click the release makes, before or after this hears it.
+		swallow_click = true
+		local view = view_ref:peek()
+		local vr = if view then ui.window_rect(view) else nil
+		marquee:set {
+			x0 = g.x0,
+			y0 = g.y0,
+			x1 = g.x0,
+			y1 = g.y0,
+			top = if vr then rect.y - vr.y else 0,
+			left = if vr then rect.x - vr.x else 0,
+		}
+		ui.invoke("marquee_begin", { keep = g.keep })
+		-- Past the top or bottom edge, the list scrolls, faster the further.
+		g.stop_scroll = ui.every(16, function()
+			local cur = gesture
+			local r = list_rect()
+			if not cur or not r then
+				return
+			end
+			local over = 0
+			if cur.py < r.y then
+				over = cur.py - r.y
+			elseif cur.py > r.y + r.height then
+				over = cur.py - (r.y + r.height)
+			end
+			if over ~= 0 then
+				list_offset:set(math.max(0, list_offset:peek() + math.clamp(over / 2, -40, 40)))
+				update(cur)
+			end
+		end)
+	end
+	update(g)
+end
+
+-- The list's press: starts a rectangle unless an item took the press.
+local function list_press(e: any)
+	if item_pressed then
+		item_pressed = false
+		return
+	end
+	swallow_click = false
+	if state.renaming:peek() ~= nil then
+		return
+	end
+	local rect = list_rect()
+	if not rect then
+		return
+	end
+	gesture = {
+		x0 = e.x - rect.x,
+		y0 = e.y - rect.y + list_offset:peek(),
+		px = e.x,
+		py = e.y,
+		keep = e.ctrl == true or e.shift == true,
+		moved = false,
+		sent = "",
+		stop_scroll = nil,
+	}
+	state.root_pointer.move = follow
+	state.root_pointer.release = finish
+end
+
+local function marquee_box(): Node
+	local function m(): Rect
+		return marquee:get() or { x0 = 0, y0 = 0, x1 = 0, y1 = 0, top = 0, left = 0 }
+	end
+	return ui.show(
+		function()
+			return marquee:get() ~= nil
+		end,
+		ui.div {
+			absolute = true,
+			top = function()
+				return m().top
+			end,
+			left = function()
+				return m().left
+			end,
+			right = 0,
+			bottom = 0,
+			overflow = "hidden",
+			pointer_events = "none",
+			ui.div {
+				absolute = true,
+				left = function()
+					return math.min(m().x0, m().x1)
+				end,
+				top = function()
+					return math.min(m().y0, m().y1) - list_offset:get()
+				end,
+				w = function()
+					return math.abs(m().x1 - m().x0)
+				end,
+				h = function()
+					return math.abs(m().y1 - m().y0)
+				end,
+				bg = "$selection.item",
+				border = 1,
+				border_color = "$accent",
+				rounded = 2,
+			},
+		}
+	)
+end
+
+-- What a press on an item does, shared by every layout.
+-- `whole`: a press anywhere on the item is on it (list and grid); in
+-- details view only its icon and name are, the rest starts a drag-select.
+local function item_handlers(index: () -> number, row: () -> state.Row, whole: boolean)
+	return {
+		on_press = if whole then claim_press else nil,
 		-- Drag out to other apps or onto folders; folders take drops and
 		-- spring open when a drag rests on them.
 		on_drag = function(): Drag?
-			if state.renaming:peek() ~= nil then
+			if state.renaming:peek() ~= nil or dragging_select() then
 				return nil
 			end
 			return drag_payload(row())
@@ -153,6 +501,9 @@ local function item_handlers(index: () -> number, row: () -> state.Row)
 			drop_on(if row().dir then state.path_of(row().id) else nil, file_paths(files))
 		end,
 		on_click = function(e)
+			if take_swallowed() then
+				return
+			end
 			local i = index()
 			ui.invoke("click", { index = i, ctrl = e.ctrl == true, shift = e.shift == true })
 			if state.setting("single_click_open") and not e.ctrl and not e.shift then
@@ -279,16 +630,119 @@ local function selected_bg(row: () -> state.Row): () -> string
 	end
 end
 
+-- Item checkboxes (Files & folders setting): a click on the box adds the
+-- item to the selection or takes it out, as Ctrl+click does.
+local function checkboxes_on(): boolean
+	return state.setting("item_checkboxes") == true
+end
+
+local function check_box(checked: () -> boolean, on_toggle: () -> (), label: string, in_list: boolean): Node
+	return ui.row {
+		role = "checkbox",
+		label = label,
+		checked = checked,
+		hidden = function()
+			return not checkboxes_on()
+		end,
+		w = 16,
+		h = 16,
+		shrink = 0,
+		items = "center",
+		justify = "center",
+		rounded = 4,
+		border = 1,
+		border_color = function()
+			return if checked() then "$accent" else "$border.strong"
+		end,
+		bg = function()
+			return if checked() then "$accent" else "$surface.sunken"
+		end,
+		-- In the list, a press on the box is on the item (no drag-select).
+		on_press = if in_list then claim_press else nil,
+		on_click = function()
+			on_toggle()
+		end,
+		ui.text {
+			function()
+				return if checked() then "✓" else ""
+			end,
+			text_size = 11,
+			weight = 700,
+			color = "$accent.text",
+		},
+	}
+end
+
+local function item_check(index: () -> number, row: () -> state.Row?): Node
+	return check_box(function()
+		local r = row()
+		return r ~= nil and state.is_selected(r.id)
+	end, function()
+		ui.invoke("click", { index = index(), ctrl = true, shift = false })
+	end, "Select", true)
+end
+
 -- Details ------------------------------------------------------------------
 
-local function header_cell(label: string | () -> string, key: string, width: number?, align: string?): Node
-	return ui.button {
-		hidden = if key == "date" or key == "type" then column_hidden(key) else false,
+-- The edge left of a sized column: dragging it left widens the column,
+-- a double click puts it back to its usual width.
+local function resize_handle(key: string): Node
+	local start: { x: number, w: number }? = nil
+	local function save(w: number)
+		ui.invoke("set_setting", { key = COL_SETTING[key], value = math.floor(w + 0.5) })
+		-- The drag's width shows until the saved setting comes back.
+		ui.after(150, function()
+			col_drag:set(nil)
+		end)
+	end
+	return ui.div {
+		absolute = true,
+		left = -9,
+		top = 4,
+		bottom = 4,
+		w = 9,
+		cursor = "col_resize",
+		label = "Resize column",
+		items = "center",
+		justify = "center",
+		on_press = function(e)
+			start = { x = e.x, w = col_w(key) }
+		end,
+		on_pointer_move = function(e)
+			local st = start
+			if st then
+				col_drag:set { key = key, w = math.clamp(st.w - (e.x - st.x), COL_MIN, COL_MAX) }
+			end
+		end,
+		on_release = function()
+			local d = col_drag:peek()
+			start = nil
+			if d and d.key == key then
+				save(d.w)
+			end
+		end,
+		on_double_click = function()
+			col_drag:set { key = key, w = COL_DEFAULT[key] }
+			save(COL_DEFAULT[key])
+		end,
+		-- The line takes no pointer: a press lands on the handle itself,
+		-- which then keeps the pointer until release.
+		ui.div {
+			w = 1,
+			h_full = true,
+			bg = "$border.subtle",
+			pointer_events = "none",
+		},
+	}
+end
+
+local function header_cell(label: string | () -> string, key: string, sized: boolean?, align: string?): Node
+	local button = ui.button {
 		label = if type(label) == "string" then `Sort by {label}` else "Sort by type",
 		on_click = ui.action("sort", key),
-		w = width,
-		grow = if width then 0 else 1,
-		shrink = if width then 0 else 1,
+		w_full = sized == true,
+		grow = if sized then 0 else 1,
+		shrink = if sized then 0 else 1,
 		min_w = 0,
 		h = 28,
 		px = 6,
@@ -320,6 +774,17 @@ local function header_cell(label: string | () -> string, key: string, width: num
 			text_size = 10,
 		},
 	}
+	if not sized then
+		return button
+	end
+	return ui.row {
+		relative = true,
+		w = col(key),
+		shrink = 0,
+		hidden = if key == "date" or key == "type" then column_hidden(key) else false,
+		button,
+		resize_handle(key),
+	}
 end
 
 local function details_header(): Node
@@ -331,14 +796,21 @@ local function details_header(): Node
 		items = "center",
 		border_sides = { 0, 0, 1, 0 },
 		border_color = "$border.subtle",
+		check_box(function()
+			local n = state.rows:len()
+			return n > 0 and state.sel:get().count == n
+		end, function()
+			local n = state.rows:len()
+			ui.invoke(if n > 0 and state.sel:peek().count == n then "select_none" else "select_all")
+		end, "Select all", false),
 		header_cell("Name", "name"),
-		header_cell("Date modified", "date", COL_DATE),
+		header_cell("Date modified", "date", true),
 		-- Search results show where each one is instead.
 		header_cell(function()
 			local n = state.nav:get()
 			return if n and n.search then "Folder" else "Kind"
-		end, "type", COL_TYPE),
-		header_cell("Size", "size", COL_SIZE, "end"),
+		end, "type", true),
+		header_cell("Size", "size", true, "end"),
 	}
 end
 
@@ -487,12 +959,24 @@ local function details_row(_item: state.Row, index: State<number>, row: State<st
 			-- Cut items fade (on the content: the row's own opacity belongs
 			-- to its entrance animation).
 			opacity = cut_opacity(r),
-			common.file_icon(field("icon"), function()
-				return r().dir
-			end, 18),
-			name_cell(r, function()
-				return index:peek()
-			end),
+			-- The icon and name: a press here is on the item (drag it,
+			-- click it); elsewhere on the row it starts a drag-select.
+			ui.row {
+				min_w = 0,
+				shrink = 1,
+				gap = 8,
+				items = "center",
+				on_press = claim_press,
+				item_check(function()
+					return index:peek()
+				end, r),
+				common.file_icon(field("icon"), function()
+					return r().dir
+				end, 18),
+				name_cell(r, function()
+					return index:peek()
+				end),
+			},
 			-- The extension as a tag, when names hide it.
 			ui.show(
 				function()
@@ -514,7 +998,7 @@ local function details_row(_item: state.Row, index: State<number>, row: State<st
 			),
 		},
 		ui.row {
-			w = COL_DATE,
+			w = col("date"),
 			shrink = 0,
 			gap = 7,
 			items = "center",
@@ -555,7 +1039,7 @@ local function details_row(_item: state.Row, index: State<number>, row: State<st
 				return r().kind
 			end,
 			literal = true,
-			w = COL_TYPE,
+			w = col("type"),
 			shrink = 0,
 			hidden = column_hidden("type"),
 			color = function()
@@ -564,7 +1048,7 @@ local function details_row(_item: state.Row, index: State<number>, row: State<st
 			truncate = true,
 		},
 		ui.row {
-			w = COL_SIZE,
+			w = col("size"),
 			shrink = 0,
 			gap = 8,
 			items = "center",
@@ -595,7 +1079,7 @@ local function details_row(_item: state.Row, index: State<number>, row: State<st
 		return index:peek()
 	end, function()
 		return row:peek()
-	end)))
+	end, false)))
 	return ui.column {
 		w_full = true,
 		on_mount = entrance(function()
@@ -643,6 +1127,9 @@ local function list_row(_item: state.Row, index: State<number>, row: State<state
 			gap = 8,
 			items = "center",
 			opacity = cut_opacity(r),
+			item_check(function()
+				return index:peek()
+			end, r),
 			common.file_icon(function()
 				return r().icon
 			end, function()
@@ -668,14 +1155,37 @@ local function list_row(_item: state.Row, index: State<number>, row: State<state
 		return index:peek()
 	end, function()
 		return row:peek()
-	end)))
+	end, true)))
 end
 
 -- Grid ---------------------------------------------------------------------
 
-local function tile_size(): (number, number)
-	local icon = state.setting("icon_size") or 64
-	return icon + 48, icon + 52
+-- Text wraps only between words, so a long name without spaces
+-- ("project_backup_2026") would end at one line. Zero-width spaces inside
+-- long words let it break there too: after _ - . where it has them, else
+-- every few letters.
+local ZWSP = utf8.char(0x200B)
+local LONG_WORD = 10
+
+local function soft_breaks(name: string): string
+	return (string.gsub(name, "[^%s]+", function(word: string): string?
+		local len = utf8.len(word)
+		if len == nil or len <= LONG_WORD then
+			return nil
+		end
+		local out = {}
+		local run = 0
+		for _, code in utf8.codes(word) do
+			local ch = utf8.char(code)
+			table.insert(out, ch)
+			run += 1
+			if ch == "_" or ch == "-" or ch == "." or run >= LONG_WORD then
+				table.insert(out, ZWSP)
+				run = 0
+			end
+		end
+		return table.concat(out)
+	end))
 end
 
 local function grid_cell(i: number): Node
@@ -716,9 +1226,18 @@ local function grid_cell(i: number): Node
 			return if x and state.is_selected(x.id) then "$selection.item" else "#00000000"
 		end,
 		hover = { bg = "$hover" },
+		relative = true,
 		on_mount = entrance(function()
 			return i
 		end),
+		ui.div {
+			absolute = true,
+			top = 6,
+			left = 6,
+			item_check(function()
+				return i
+			end, r),
+		},
 		ui.column {
 			w_full = true,
 			gap = 6,
@@ -740,7 +1259,7 @@ local function grid_cell(i: number): Node
 			ui.text {
 				function()
 					local x = r()
-					return if x then x.name else ""
+					return if x then soft_breaks(x.name) else ""
 				end,
 				literal = true,
 				align = "center",
@@ -755,7 +1274,7 @@ local function grid_cell(i: number): Node
 		return i
 	end, function()
 		return r() :: state.Row
-	end)))
+	end, true)))
 end
 
 local function grid_row(r: number): Node
@@ -846,6 +1365,8 @@ local function list_of(kind: string): Node
 	if kind == "grid" then
 		return ui.list {
 			ref = state.list_ref,
+			offset = list_offset,
+			on_press = list_press,
 			count = function()
 				local cols = state.grid_cols:get()
 				return math.ceil(state.rows:len() / math.max(1, cols))
@@ -871,6 +1392,8 @@ local function list_of(kind: string): Node
 	end
 	return ui.list {
 		ref = state.list_ref,
+		offset = list_offset,
+		on_press = list_press,
 		data = state.rows,
 		key = keyed,
 		row = if kind == "list" then list_row else details_row,
@@ -937,6 +1460,7 @@ return function(): Node
 		w_full = true,
 		min_h = 0,
 		relative = true,
+		ref = view_ref,
 		focusable = true,
 		label = "Items",
 		on_resize = function(size)
@@ -976,6 +1500,9 @@ return function(): Node
 		end,
 		-- A click on empty space clears the selection.
 		on_click = function(e)
+			if take_swallowed() then
+				return
+			end
 			if not e.ctrl and not e.shift then
 				ui.invoke("select_none")
 			end
@@ -989,5 +1516,6 @@ return function(): Node
 			grid = list_of("grid"),
 		}),
 		empty_or_error(),
+		marquee_box(),
 	}
 end

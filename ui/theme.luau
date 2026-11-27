@@ -110,6 +110,15 @@ ui.theme.tokens {
 		-- follows Windows' own mode, which may be dark).
 		chrome = "#00000000",
 	},
+	-- Code in the preview pane (components/highlight.luau); each theme
+	-- gives its own below.
+	code = {
+		keyword = "{accent}",
+		string = "{success}",
+		comment = "{text.tertiary}",
+		number = "{warning}",
+		type = "{text.primary}",
+	},
 }
 
 local common = {
@@ -150,6 +159,14 @@ ui.theme.register {
 		danger = "#FF5D4D",
 		success = "#7FD48A",
 		warning = "#FFB020",
+		-- The preview pane's code (components/highlight.luau).
+		code = {
+			keyword = "#FFB020",
+			string = "#A8D08D",
+			comment = "#7A7064",
+			number = "#E9A6C8",
+			type = "#8CC8E6",
+		},
 		hover = "#FFE4BE14",
 		pressed = "#FFE4BE1F",
 		selection = { value = "alpha({accent}, 0.30)", item = "alpha({accent}, 0.13)" },
@@ -177,6 +194,13 @@ ui.theme.register {
 		danger = "#D93A2B",
 		success = "#2F9E4F",
 		warning = "#D98A00",
+		code = {
+			keyword = "#B86E00",
+			string = "#3F7F2E",
+			comment = "#968B7D",
+			number = "#A8437A",
+			type = "#1F6E96",
+		},
 		hover = "#3A2A1210",
 		pressed = "#3A2A121A",
 		selection = { value = "alpha({accent}, 0.25)", item = "alpha({accent}, 0.14)" },

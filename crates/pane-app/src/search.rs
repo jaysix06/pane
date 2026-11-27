@@ -7,6 +7,10 @@
 //! is a wildcard pattern for the whole name (`*.rs`, `report-??.pdf`).
 //! The Search settings choose case-sensitive and whole-name matching, hidden
 //! files, and how deep to go.
+//!
+//! A search from a drive's root (C:\) asks the helper service first, which
+//! finds names in the drive's master file table at once; without it (not
+//! installed, not NTFS) the folders are walked as anywhere else.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -14,6 +18,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use pane_fs::Entry;
+use pane_scan::find::FindRequest;
 
 #[derive(Clone, Debug)]
 pub struct Options {
@@ -22,72 +27,84 @@ pub struct Options {
     pub hidden: bool,
     /// Folder levels below the one searched (0: that folder only).
     pub max_depth: u32,
+    /// Ask the helper service when searching a whole drive.
+    pub instant_drives: bool,
 }
 
-/// A query, ready to test names against.
-pub struct Matcher {
-    text: String,
-    wildcard: bool,
-    case_sensitive: bool,
-    whole_name: bool,
-}
+/// A query, ready to test names against (shared with the helper service,
+/// so a drive searched either way finds the same).
+pub struct Matcher(pane_scan::find::Matcher);
 
 impl Matcher {
     pub fn new(query: &str, opts: &Options) -> Matcher {
-        let query = query.trim();
-        let text = if opts.case_sensitive { query.to_string() } else { query.to_lowercase() };
-        Matcher {
-            wildcard: text.contains(['*', '?']),
-            text,
-            case_sensitive: opts.case_sensitive,
-            whole_name: opts.whole_name,
-        }
+        Matcher(pane_scan::find::Matcher::new(query, opts.case_sensitive, opts.whole_name))
     }
 
     pub fn matches(&self, name: &str) -> bool {
-        if self.text.is_empty() {
-            return false;
-        }
-        let lowered;
-        let name = if self.case_sensitive {
-            name
-        } else {
-            lowered = name.to_lowercase();
-            &lowered
-        };
-        if self.wildcard {
-            wildcard(&self.text, name)
-        } else if self.whole_name {
-            name == self.text
-        } else {
-            name.contains(&self.text)
-        }
+        self.0.matches(name)
     }
 }
 
-/// `*` (any run, also none) and `?` (one character), over the whole name.
-fn wildcard(pattern: &str, name: &str) -> bool {
-    let p: Vec<char> = pattern.chars().collect();
-    let n: Vec<char> = name.chars().collect();
-    let (mut pi, mut ni) = (0, 0);
-    let (mut star, mut mark) = (None, 0);
-    while ni < n.len() {
-        if pi < p.len() && (p[pi] == '?' || p[pi] == n[ni]) {
-            pi += 1;
-            ni += 1;
-        } else if pi < p.len() && p[pi] == '*' {
-            star = Some(pi);
-            pi += 1;
-            mark = ni;
-        } else if let Some(s) = star {
-            pi = s + 1;
-            mark += 1;
-            ni = mark;
-        } else {
+/// Most results a search of a whole drive through the service shows.
+const DRIVE_LIMIT: u32 = 5000;
+
+/// "C:" when `root` is a drive's root (C:\), else None.
+pub fn drive_root(root: &Path) -> Option<String> {
+    let s = root.to_str()?;
+    let b = s.as_bytes();
+    let is_root = (b.len() == 2 || (b.len() == 3 && (b[2] == b'\\' || b[2] == b'/'))) && b[0].is_ascii_alphabetic() && b[1] == b':';
+    is_root.then(|| s[..2].to_ascii_uppercase())
+}
+
+/// The drive search through the service: true if it ran (results sent),
+/// false to search the usual way instead.
+fn run_instant(volume: &str, query: &str, opts: &Options, cancel: &AtomicBool, send: &mut impl FnMut(Event) -> bool) -> bool {
+    let request = FindRequest {
+        volume: volume.to_string(),
+        query: query.trim().to_string(),
+        case_sensitive: opts.case_sensitive,
+        whole_name: opts.whole_name,
+        hidden: opts.hidden,
+        max_depth: opts.max_depth,
+        limit: DRIVE_LIMIT,
+    };
+    if request.valid().is_err() {
+        return false;
+    }
+    let mut stopped = false;
+    let mut on_batch = |batch: Vec<pane_scan::find::Found>| {
+        let entries: Vec<Entry> = batch
+            .into_iter()
+            .map(|f| Entry {
+                name: f.path,
+                is_dir: f.dir,
+                size: f.size,
+                modified: f.modified,
+                hidden: f.hidden,
+                system: f.system,
+            })
+            .collect();
+        if !send(Event::Found(entries)) {
+            stopped = true;
             return false;
         }
+        true
+    };
+    match pane_scan::client::find(&request, &mut on_batch, cancel) {
+        Some(end) => {
+            if !stopped {
+                eprintln!(
+                    "[pane] instant search of {volume} for {query:?}: {} matches, {} ms{}",
+                    end.matched,
+                    end.took_ms,
+                    if end.fresh { " (table read)" } else { "" }
+                );
+                send(Event::Done { folders: 0 });
+            }
+            true
+        }
+        None => false,
     }
-    p[pi..].iter().all(|&c| c == '*')
 }
 
 /// A search's progress, as it goes.
@@ -103,6 +120,12 @@ pub enum Event {
 /// 100 ms. Blocks: run it on a thread. Stops when `cancel` is set or
 /// `send` returns false.
 pub fn run(root: &Path, query: &str, opts: &Options, cancel: &AtomicBool, mut send: impl FnMut(Event) -> bool) {
+    if opts.instant_drives
+        && let Some(volume) = drive_root(root)
+        && run_instant(&volume, query, opts, cancel, &mut send)
+    {
+        return;
+    }
     let matcher = Matcher::new(query, opts);
     // Breadth first: nearby matches come first.
     let mut queue = std::collections::VecDeque::from([(String::new(), 0u32)]);
@@ -149,7 +172,7 @@ mod tests {
     use super::*;
 
     fn opts() -> Options {
-        Options { case_sensitive: false, whole_name: false, hidden: false, max_depth: 32 }
+        Options { case_sensitive: false, whole_name: false, hidden: false, max_depth: 32, instant_drives: false }
     }
 
     #[test]
@@ -169,11 +192,11 @@ mod tests {
     }
 
     #[test]
-    fn wildcards() {
-        assert!(wildcard("*", ""));
-        assert!(wildcard("a*b*c", "a-x-b-y-c"));
-        assert!(!wildcard("a*b", "a-x-c"));
-        assert!(wildcard("*.tar.gz", "x.tar.gz"));
+    fn drive_roots() {
+        assert_eq!(drive_root(Path::new(r"C:\")).as_deref(), Some("C:"));
+        assert_eq!(drive_root(Path::new("d:")).as_deref(), Some("D:"));
+        assert_eq!(drive_root(Path::new(r"C:\Users")), None);
+        assert_eq!(drive_root(Path::new(r"\\server\share")), None);
     }
 
     #[test]

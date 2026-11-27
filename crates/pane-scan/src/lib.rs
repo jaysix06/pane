@@ -9,6 +9,7 @@ pub mod aggregate;
 pub mod cache;
 pub mod classify;
 pub mod client;
+pub mod find;
 pub mod ipc;
 pub mod mft;
 pub mod model;

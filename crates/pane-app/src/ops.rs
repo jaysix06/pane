@@ -327,19 +327,46 @@ fn publish_cut(ops: &OpsRef, _app: &AppRef) {
     o.cut.set(value);
 }
 
+/// The folder on screen, to make or paste things in: not one inside a zip
+/// file, which Pane opens read-only.
 fn current_folder(app: &AppRef) -> Option<PathBuf> {
+    if app::showing_zip(app) {
+        app.borrow().toast(READ_ONLY_ZIP);
+        return None;
+    }
     match &app.borrow().tab().history.current {
         Location::Folder(p) => Some(p.clone()),
         _ => None,
     }
 }
 
+const READ_ONLY_ZIP: &str = "Pane opens zip files read-only: copy items out of it to change them.";
+
 // ---------------------------------------------------------------- actions
 
 pub fn copy(ops: &OpsRef, app: &AppRef, cut: bool) {
-    let paths = app.borrow().tab().selected_paths();
+    let mut paths = app.borrow().tab().selected_paths();
     if paths.is_empty() {
         return;
+    }
+    // From a zip: taken out to a temporary folder first, so a paste
+    // anywhere (Pane, Explorer, other apps) gets real files.
+    if app::showing_zip(app) {
+        if cut {
+            app.borrow().toast(READ_ONLY_ZIP);
+            return;
+        }
+        let mut out = Vec::new();
+        for p in &paths {
+            match app::extract_from_zip(p) {
+                Ok(o) => out.push(o),
+                Err(e) => {
+                    app.borrow().toast(&e);
+                    return;
+                }
+            }
+        }
+        paths = out;
     }
     if !pane_shell::clipboard::set_files(hwnd(), &paths, cut) {
         app.borrow().toast("Couldn't use the clipboard; another app may be holding it.");
@@ -386,6 +413,10 @@ pub fn paste(ops: &OpsRef, app: &AppRef) {
 /// Deletes the selection: to the Recycle Bin, or for good with `permanent`
 /// (the UI has asked; `confirmed` says so).
 pub fn delete(ops: &OpsRef, app: &AppRef, permanent: bool, confirmed: bool) {
+    if app::showing_zip(app) {
+        app.borrow().toast(READ_ONLY_ZIP);
+        return;
+    }
     let paths = app.borrow().tab().selected_paths();
     if paths.is_empty() || (permanent && !confirmed) {
         return;
@@ -400,6 +431,10 @@ pub fn delete(ops: &OpsRef, app: &AppRef, permanent: bool, confirmed: bool) {
 }
 
 pub fn rename(ops: &OpsRef, app: &AppRef, index: usize, name: &str) {
+    if app::showing_zip(app) {
+        app.borrow().toast(READ_ONLY_ZIP);
+        return;
+    }
     let Some(path) = app.borrow().tab().path_of(index) else { return };
     let current = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     if name == current {
@@ -446,6 +481,26 @@ pub fn new_folder(ops: &OpsRef, app: &AppRef) {
             }
         })),
     );
+}
+
+/// The New menu's files: an empty file of `kind` ("text", "markdown"),
+/// selected and renaming as a new folder is.
+pub fn new_file(ops: &OpsRef, app: &AppRef, kind: &str) {
+    let Some(dir) = current_folder(app) else { return };
+    let (stem, ext) = match kind {
+        "text" => ("New Text Document", "txt"),
+        "markdown" => ("New Markdown Document", "md"),
+        _ => return,
+    };
+    let name = pane_shell::fileops::unique_file_name(&dir, stem, ext);
+    match std::fs::File::create_new(dir.join(&name)) {
+        Ok(_) => {
+            app::select_name_after_load(app, &name);
+            request_rename(ops, &name);
+            app::refresh(app);
+        }
+        Err(e) => app.borrow().toast(&format!("Couldn't create {name}: {e}")),
+    }
 }
 
 /// Asks the UI to put row `name` into rename mode.

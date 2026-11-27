@@ -2,6 +2,8 @@
 
 Where Pane is and what comes next. Latest release: **0.2.1** (0.2.0 plus a tab-closing fix: Settings, folder search, session restore, the folder view redesign, and Milestone 6's polish and performance).
 
+**Unreleased (after 0.2.1):** drag-select, resizable columns and preview pane, item checkboxes, a New menu, folders sorted by measured size, dates that change at midnight, a log file, grid names that wrap, drives that show as they arrive, code highlighting in the preview, instant whole-drive search, and browsing inside zip files (each below). Built and tested in code (unit tests, a release build, the service's find end to end); **none of it has been checked on screen in the dev build yet**. Seen once while checking: `meter.luau:221` warns that a drive meter's animation keeps restarting; it shows on some launches and not others, with or without these changes.
+
 ## Done
 
 - [x] **Milestone 1: Spike.** zgx window with the Windows 11 title bar, a 100,000-file list fed from Rust, Explorer's real right-click menu.
@@ -29,9 +31,9 @@ Where Pane is and what comes next. Latest release: **0.2.1** (0.2.0 plus a tab-c
 
 Left for later from Milestone 5:
 
-- [ ] Item checkboxes (the setting exists; the file views don't draw them yet)
+- [x] Item checkboxes: Files & folders → "Item checkboxes" draws a box on each row (details, list) and tile (grid); a click adds or removes the item as Ctrl+click does. Details view's header has a select-all box.
 - [ ] Language choice (Pane is English only for now)
-- [ ] A log file (Pane's messages go nowhere in a release build)
+- [x] A log file: a release build sends its messages (and the UI scripts' errors) to `%APPDATA%\Pane\pane.log`, set aside as `pane.old.log` past 1 MB (`pane_shell::log_to_file`). Settings → Advanced → "Log file" opens it. A debug build keeps the console.
 
 ## Next: Folder view redesign (A, B, C)
 
@@ -47,7 +49,7 @@ The toolbar shows ten unlabeled icons at all times, half of them disabled with n
 - [x] Sort shows its current key as text ("Sort Name").
 - [x] The search box is wider and its placeholder says "Search <folder> and subfolders".
 - [x] Rust publishes `shared("clipboard")` = `{ count, cut }` (`app::refresh_clipboard`: checks the clipboard sequence number on selection changes, after copy / cut / paste, and when the window becomes active) and `sel.files`, `sel.folders`, `sel.size`.
-- [ ] Later, if wanted: a "New" menu with more than New folder (text file and so on).
+- [x] A "New" menu beside New folder: Folder, Text document, Markdown document (`ops::new_file`, numbered as Explorer does: "New Text Document (2).txt", `unique_file_name`, tested), selected and renaming once made. Not Explorer's full ShellNew list (Word and so on).
 - Files: `ui/components/toolbar.luau`, `ui/shortcuts.luau` (`hint`), `ui/state.luau`, `crates/pane-app/src/app.rs`, `crates/pane-app/src/main.rs` (window-active effect), `crates/pane-app/src/ops.rs`, `crates/pane-shell/src/clipboard.rs` (`sequence`).
 - Checked in the dev build: nothing selected, three files, one file (Rename shows), Copy → "Paste 3 items", This PC, Overview. Not checked: light theme, a narrow window.
 
@@ -57,8 +59,8 @@ The toolbar shows ten unlabeled icons at all times, half of them disabled with n
 - [x] The Type column is now Kind: subfolders show their item count ("9 items", "Empty"); files show a readable kind ("Markdown", "Lockfile", "Git file"; `kind_name` in `app.rs`, tested). When names hide extensions, the extension shows as a small mono tag after the name.
 - [x] Group headers in details view when folders come first, in folders (not search, This PC or the Overview): "FOLDERS 8 ──── 21 GB" ("Measuring…" until done) and "FILES 6 ──── 148 KB". Done with the list's per-row `heights` (the first folder and first file rows are taller), so row indexes, selection and keys are unchanged. Skipped past 20,000 rows.
 - [x] Folder sizes: `crates/pane-app/src/sizes.rs` measures the folder on screen on one background thread (lowered CPU and disk priority): item counts first, then sizes (`pane_fs::folder_size`, which doesn't follow junctions or symlinks), published as `shared("sizes")`. Ten LEDs show each folder's share of the folder, rounded to tenths, once every size is known. A new folder cancels the walk; sizes are kept 2 minutes. Not on network drives. Setting: "Show folder sizes" (`folder_sizes`). Home (56 folders, 135 GB) takes about 41 s here; the project folder is instant.
-- [ ] Later: sorting by size doesn't use measured folder sizes yet (folders still sort as 0 bytes).
-- [ ] Later: friendly dates are worked out when a folder is listed, so "Today" stays "Today" past midnight until the folder is listed again.
+- [x] Sorting by size uses measured folder sizes: once sizes.rs knows every subfolder's size it says so (`Sizes::take_done`), and a Size sort puts the folders in order then, keeping the selection (`sort_by_folder_sizes`, `pane_fs::sort_entries_by_size`, tested). A refresh of a measured folder sorts at once.
+- [x] Friendly dates change at midnight: every tab's rows are built again then (`midnight_loop`, `rebuild_rows`). The amber "last hour" dot still only updates when a folder is listed again.
 - [ ] Later: a change deep inside a subfolder shows up in its size only after the 2-minute cache ends.
 - Files: `crates/pane-fs/src/date.rs`, `crates/pane-fs/src/size.rs`, `crates/pane-app/src/sizes.rs`, `crates/pane-app/src/app.rs` (`row_text`, `kind_name`, `publish_groups`, `request_sizes`), `crates/pane-app/src/settings.rs`, `ui/components/views.luau`, `ui/state.luau` (`sizes`, `groups`, `folder_info`), `ui/settings.luau`.
 - Checked in the dev build: the project folder, Home (sizes, groups, End / Page Up across the FILES header), list view, This PC, search results. Not checked: light theme, a narrow window, a network drive.
@@ -78,9 +80,9 @@ The toolbar shows ten unlabeled icons at all times, half of them disabled with n
 
 ## Milestone 4 follow-ups
 
-- [ ] Thumbnail cache on disk, so folders opened again after a restart don't wait (measure Windows' own cache first)
-- [ ] Resizable preview pane (with resizable columns, below: the same drag handle)
-- [ ] Syntax highlighting in code previews
+- [x] ~~Thumbnail cache on disk~~: not needed. Measured Windows' own cache first (`cargo run -p pane-shell --release --example thumbtime -- <folder>`, 2026-11-27): a new process gets a 256 px thumbnail of a picture made before in 4–10 ms, 1–4.5 ms once warm. A cache of Pane's own (256 KB a bitmap) would save a few ms a tile.
+- [x] Resizable preview pane: drag its left edge (220–720 points, the `preview_width` setting); a double click puts it back to 320.
+- [x] Syntax highlighting in code previews (`ui/components/highlight.luau`, zgx's textarea `highlight`): keywords, strings, comments (block comments and template strings run on across lines), numbers and capitalised type names, for Rust, C/C++/Java/Kotlin/Swift, C#, JavaScript/TypeScript, Go, Python, shell/PowerShell, Lua/Luau, SQL, JSON and config files (TOML, INI, YAML). Colours are `$code.*` theme tokens, one set per theme. Not checked on screen.
 - [ ] Try video previews and thumbnails across common formats
 
 ## Milestone 6: Polish and performance
@@ -114,14 +116,14 @@ Left for later from Milestone 6:
 
 - [ ] Memory with 100k files: rows are built as script values all at once; build them for what's on screen (or more compactly) instead.
 - [ ] Start-up animations keep the window drawing for about 1.5 s after launch.
-- [ ] Free space is still polled every 15 s (cheap now, and nothing redraws unless it changes); drive arrival could come from `WM_DEVICECHANGE` instead.
+- [x] Drives that arrive or go (a USB stick) show at once: a hidden window on its own thread hears `WM_DEVICECHANGE` (`pane_shell::watch_devices`), and the sidebar reads the drives 0.8 s later. Free space other apps change is read every 60 s (was 15 s); Pane's own operations read it as they end. Not checked with a real stick.
 - [ ] Measure a cold start (empty shader cache) with DXC against FXC on this machine.
 
 ## Smaller leftovers
 
-- [ ] Drag-select (rubber band) in the file views
-- [ ] Resizable columns in details view
-- [ ] Grid view: folder names without spaces are cut to one line
+- [x] Drag-select (rubber band) in the file views: a press on empty space (in details view, anywhere on a row but its icon and name, as in Explorer) and a drag draws an amber rectangle and selects what it touches; Ctrl or Shift keeps the selection there was. The list scrolls while the pointer is past its top or bottom. The rows covered are worked out in `views.luau` (`covered`) and sent as ranges (`marquee_begin`, `marquee`, `marquee_end`; `Selection::marquee`, tested). Not checked on screen: a release outside the window may leave the rectangle until the next press.
+- [x] Resizable columns in details view: drag the hairline left of Date modified, Kind or Size (60–480 points, saved as `col_date`, `col_kind`, `col_size`); a double click puts one back. Name takes the rest.
+- [x] Grid view: long names without spaces wrap to two lines (zero-width spaces after `_ - .`, or every 10 letters, in the shown name only).
 - [ ] Test drag and drop to and from other apps (desktop, Explorer)
 - [ ] Test the temp-files "Clear…" button on a machine where deleting temp files is fine
 - [ ] Code-sign the installer so Windows SmartScreen stops warning (needs a paid certificate)
@@ -129,7 +131,7 @@ Left for later from Milestone 6:
 
 ## Later ideas
 
-- [ ] Instant search across the whole drive (MFT plus the helper service)
+- [x] Instant search across the whole drive: a search from a drive's root (C:\) asks the helper service (`{"find":{...}}`, `pane_scan::find`), which reads the drive's MFT once and keeps the table 90 s for the next keystrokes. It leaves out NTFS's own files, other users' profiles and (unless Search → hidden files) hidden items and what's in hidden folders, and checks each match as the caller (impersonated), so only what they could open comes back; at most 5,000. Folder searches and the folder walk share one `Matcher`. Settings → Search → "Instant search of whole drives". Without the service, or with an older one that only scans, the drive is walked as before. Measured with `pane-scan-service debug-serve` and `cargo run -p pane-scan --example find -- C: readme`: 4.3 s the first time (reading C:'s table), 122 ms after. **The installed service must be updated (a new installer) before Pane uses it.** Changes made after the table is read don't show until it's read again.
 - [ ] A background process so new windows open instantly
-- [ ] Browsing inside zip files
+- [x] Browsing inside zip files, read-only (`pane_fs::zip`, tested): a .zip opens as a folder, its folders open, a file in it is taken out to `%TEMP%\Pane\zip\` and opened, and Copy takes the selection out there and puts those files on the clipboard. Delete, Rename, Cut, Paste, New and the right-click menus say it's read-only or do nothing. Stored and deflated entries only. Not checked on screen; dragging items out of a zip doesn't work yet.
 - [ ] Phones and cameras (MTP)

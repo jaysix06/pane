@@ -12,6 +12,13 @@ use serde::{Deserialize, Serialize};
 /// Bump when a field changes meaning; `migrate` upgrades older files.
 pub const VERSION: u32 = 2;
 
+/// What a dragged column or preview pane may be, in points (ui/ clamps the
+/// same while dragging).
+pub const COLUMN_MIN: u32 = 60;
+pub const COLUMN_MAX: u32 = 480;
+pub const PREVIEW_MIN: u32 = 220;
+pub const PREVIEW_MAX: u32 = 720;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -59,6 +66,10 @@ pub struct Settings {
     pub relative_dates: bool,
     /// Work out folder sizes in the background (not on network drives).
     pub folder_sizes: bool,
+    /// Details view's column widths in points, dragged at the header.
+    pub col_date: u32,
+    pub col_kind: u32,
+    pub col_size: u32,
 
     // Sidebar
     pub sidebar_quick_access: bool,
@@ -71,12 +82,16 @@ pub struct Settings {
     pub thumbnails_network: bool,
     pub preview_pane: bool,
     pub preview_max_kb: u32,
+    /// The preview pane's width in points, dragged at its edge.
+    pub preview_width: u32,
 
     // Search
     pub search_hidden: bool,
     pub search_case_sensitive: bool,
     pub search_whole_name: bool,
     pub search_max_depth: u32,
+    /// A search from a drive's root asks the helper service (instant).
+    pub search_instant_drives: bool,
 
     // Keyboard shortcuts: command id to key, overriding the defaults.
     pub shortcuts: BTreeMap<String, String>,
@@ -119,6 +134,9 @@ impl Default for Settings {
             natural_sort: true,
             relative_dates: true,
             folder_sizes: true,
+            col_date: 170,
+            col_kind: 190,
+            col_size: 140,
             sidebar_quick_access: true,
             sidebar_known_folders: true,
             sidebar_drives: true,
@@ -127,10 +145,12 @@ impl Default for Settings {
             thumbnails_network: false,
             preview_pane: false,
             preview_max_kb: 1024,
+            preview_width: 320,
             search_hidden: false,
             search_case_sensitive: false,
             search_whole_name: false,
             search_max_depth: 32,
+            search_instant_drives: true,
             shortcuts: BTreeMap::new(),
             thumbnail_threads: 2,
             check_updates: true,
@@ -261,6 +281,10 @@ impl Settings {
         self.text_size = self.text_size.clamp(11.0, 20.0);
         self.icon_size = self.icon_size.clamp(32, 128);
         self.preview_max_kb = self.preview_max_kb.clamp(16, 64 * 1024);
+        self.preview_width = self.preview_width.clamp(PREVIEW_MIN, PREVIEW_MAX);
+        for w in [&mut self.col_date, &mut self.col_kind, &mut self.col_size] {
+            *w = (*w).clamp(COLUMN_MIN, COLUMN_MAX);
+        }
         self.search_max_depth = self.search_max_depth.clamp(1, 256);
         self.thumbnail_threads = self.thumbnail_threads.clamp(1, 8);
         self.pinned.dedup();

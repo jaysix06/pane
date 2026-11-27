@@ -4,5 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[dependencies]
+# Browsing inside zip files (read-only): stored and deflated entries, inflated
+# in pure Rust.
+zip = { version = "9.8", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_System_Time"] }

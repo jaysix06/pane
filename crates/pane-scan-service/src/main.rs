@@ -8,9 +8,11 @@
 //! Security: it runs as LocalSystem, so it does as little as possible. It
 //! is installed into Program Files (not a user-writable folder); it serves
 //! one local pipe whose ACL admits only the installing user, SYSTEM and
-//! Administrators; it accepts only `{"scan":"X:"}`; it names no file in
-//! another user's profile (those count as one "other users" total); and it
-//! stops itself after a minute without requests.
+//! Administrators; it accepts only `{"scan":"X:"}` and a name search of a
+//! drive (`{"find":{...}}`, checked by `FindRequest::valid`); it names no
+//! file in another user's profile (those count as one "other users" total),
+//! and a search returns only what the caller can open, checked as the
+//! caller; and it stops itself after a minute without requests.
 
 #[cfg(windows)]
 mod win;

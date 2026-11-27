@@ -489,6 +489,55 @@ local function selection_commands(): Node
 	}
 end
 
+-- More to make than a folder: files of a few kinds.
+local function new_menu(): Node
+	local open = ui.state("new_menu_open", false)
+	local function item(label: string, icon: string, run: () -> ()): Node
+		return ui.menu_item {
+			label = label,
+			on_click = function()
+				open:set(false)
+				run()
+			end,
+			ui.row {
+				gap = 8,
+				items = "center",
+				ui.div { color = "$text.secondary", icons.icon(icon, 15) },
+				ui.text { label },
+			},
+		}
+	end
+	return ui.menu {
+		open = open,
+		label = "New",
+		anchor = ui.button {
+			label = "New",
+			tooltip = ui.text { "New file" },
+			tooltip_placement = { side = "bottom", align = "center", offset = 6 },
+			on_click = ui.toggle(open),
+			h = 30,
+			px = 9,
+			gap = 6,
+			items = "center",
+			shrink = 0,
+			rounded = "$radius.md",
+			bg = "#00000000",
+			color = "$text.primary",
+			hover = { bg = "$hover" },
+			active = { bg = "$pressed" },
+			ui.div { color = "$text.secondary", icons.icon("plus", 15) },
+			ui.text { "New", text_size = 13 },
+		},
+		item("Folder", "folder", commands.new_folder),
+		item("Text document", "doc", function()
+			commands.new_file("text")
+		end),
+		item("Markdown document", "doc", function()
+			commands.new_file("markdown")
+		end),
+	}
+end
+
 -- Commands for the folder itself, with nothing selected: a new folder, and
 -- pasting what's on the clipboard (only while it holds files).
 local function folder_commands(): Node
@@ -502,6 +551,7 @@ local function folder_commands(): Node
 			tooltip = hint("new_folder"),
 			on_click = commands.new_folder,
 		},
+		new_menu(),
 		ui.show(
 			function()
 				return state.clipboard:get().count > 0

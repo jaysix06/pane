@@ -6,10 +6,11 @@ mod list;
 mod size;
 mod sort;
 mod watch;
+pub mod zip;
 
 pub use list::{list_dir, list_dir_early};
 pub use size::{FolderSize, background_priority, folder_size, item_count};
-pub use sort::{SortKey, SortOptions, natural_cmp, sort_entries};
+pub use sort::{SortKey, SortOptions, natural_cmp, sort_entries, sort_entries_by_size};
 #[cfg(windows)]
 pub use watch::{Watcher, watch};
 

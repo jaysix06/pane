@@ -120,6 +120,12 @@ M.grid_cols = ui.state("grid_cols", 6)
 -- The folder view's width: details drops columns as it narrows.
 M.view_w = ui.state("view_w", 1000)
 M.list_ref = ui.ref()
+-- Pointer moves and releases anywhere in the window, heard on the app's
+-- root: a drag-select follows the pointer past the list's edges.
+M.root_pointer = {
+	move = nil :: ((e: any) -> ())?,
+	release = nil :: ((e: any) -> ())?,
+}
 
 -- Small readers.
 -- What's known of subfolder `id` of the folder on screen: { count, size,

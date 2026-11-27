@@ -60,6 +60,13 @@ function M.new_folder()
 	end
 end
 
+-- An empty file from the New menu: "text" or "markdown".
+function M.new_file(kind: string)
+	if in_folder() then
+		ui.invoke("new_file", kind)
+	end
+end
+
 function M.copy()
 	if in_folder() then
 		ui.invoke("copy")

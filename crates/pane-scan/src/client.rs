@@ -3,6 +3,7 @@
 
 use std::sync::atomic::AtomicBool;
 
+use crate::find::{FindRequest, Found};
 use crate::walk::Report;
 
 #[cfg(windows)]
@@ -22,6 +23,8 @@ mod imp {
     };
     use windows::core::HSTRING;
 
+    use super::FindEnd;
+    use crate::find::{FindReply, FindRequest, Found};
     use crate::ipc;
     use crate::model::Event;
     use crate::walk::Report;
@@ -141,8 +144,8 @@ mod imp {
             return false;
         }
         let Some(mut pipe) = connect() else { return false };
-        let request = serde_json::to_string(&ipc::Request { scan: volume.to_string() }).unwrap_or_default();
-        if pipe.write_all(format!("{request}\n").as_bytes()).is_err() {
+        let request = ipc::Request::Scan(volume.to_string()).line();
+        if pipe.write_all(request.as_bytes()).is_err() {
             return false;
         }
         let mut reader = BufReader::new(pipe);
@@ -165,6 +168,63 @@ mod imp {
                 Ok(e) => report(e),
             }
         }
+    }
+
+    pub fn find(request: &FindRequest, found: &mut dyn FnMut(Vec<Found>) -> bool, cancel: &AtomicBool) -> Option<FindEnd> {
+        if !installed() || !ensure_running() {
+            return None;
+        }
+        let mut pipe = connect()?;
+        pipe.write_all(ipc::Request::Find(request.clone()).line().as_bytes()).ok()?;
+        let mut reader = BufReader::new(pipe);
+        let mut line = String::new();
+        let mut any = false;
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                return Some(FindEnd { matched: 0, took_ms: 0, fresh: false });
+            }
+            line.clear();
+            match reader.read_line(&mut line) {
+                // Gone partway: what came is kept, the rest isn't known.
+                Ok(0) | Err(_) => return any.then_some(FindEnd { matched: 0, took_ms: 0, fresh: false }),
+                Ok(_) => {}
+            }
+            match serde_json::from_str::<FindReply>(&line) {
+                // An older service that only scans says "bad request".
+                Ok(FindReply::Error(_)) | Err(_) => return None,
+                Ok(FindReply::Found(batch)) => {
+                    any = true;
+                    if !found(batch) {
+                        return Some(FindEnd { matched: 0, took_ms: 0, fresh: false });
+                    }
+                }
+                Ok(FindReply::Done { matched, took_ms, fresh }) => return Some(FindEnd { matched, took_ms, fresh }),
+            }
+        }
+    }
+}
+
+/// How a find through the service ended.
+#[derive(Clone, Copy, Debug)]
+pub struct FindEnd {
+    pub matched: u64,
+    pub took_ms: u64,
+    /// The service read the drive's table for it (else it used one it kept).
+    pub fresh: bool,
+}
+
+/// Finds names on a whole drive through the service, giving each batch of
+/// matches to `found` (false stops it). None if the service can't (not
+/// installed, an older one, not NTFS, no rights): search the usual way.
+pub fn find(request: &FindRequest, found: &mut dyn FnMut(Vec<Found>) -> bool, cancel: &AtomicBool) -> Option<FindEnd> {
+    #[cfg(windows)]
+    {
+        imp::find(request, found, cancel)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (request, found, cancel);
+        None
     }
 }
 

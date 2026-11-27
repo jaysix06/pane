@@ -68,6 +68,9 @@ pub struct Sizes {
     cancel: RefCell<Arc<AtomicBool>>,
     local: Rc<RefCell<Local>>,
     out: Shared,
+    /// Says which folder has every size known, for app.rs to take
+    /// (a Size sort puts the folders in order then).
+    done_rx: RefCell<Option<UnboundedReceiver<PathBuf>>>,
 }
 
 impl Sizes {
@@ -81,13 +84,15 @@ impl Sizes {
                 .spawn(move || work(&queue, &tx))
                 .expect("folder size thread");
         }
+        let (done_tx, done_rx) = unbounded::<PathBuf>();
         let sizes = Sizes {
             queue,
             cancel: RefCell::new(Arc::new(AtomicBool::new(false))),
             local: Rc::default(),
             out: host.shared("sizes", Value::Nil),
+            done_rx: RefCell::new(Some(done_rx)),
         };
-        let publish = publish(sizes.out.clone(), sizes.local.clone(), rx);
+        let publish = publish(sizes.out.clone(), sizes.local.clone(), rx, done_tx);
         (sizes, publish)
     }
 
@@ -125,6 +130,20 @@ impl Sizes {
         let (lock, wake) = &*self.queue;
         *lock.lock().expect("size queue") = Some(Job { generation, folder: folder.to_path_buf(), names, cancel });
         wake.notify_one();
+    }
+
+    /// Takes the stream of folders whose sizes are all known (once).
+    pub fn take_done(&self) -> Option<UnboundedReceiver<PathBuf>> {
+        self.done_rx.borrow_mut().take()
+    }
+
+    /// Every subfolder's size in bytes, once all of `folder`'s are known.
+    pub fn known(&self, folder: &Path) -> Option<HashMap<String, u64>> {
+        let l = self.local.borrow();
+        if !l.done || l.folder.as_deref() != Some(folder) {
+            return None;
+        }
+        Some(l.items.iter().filter_map(|(n, i)| Some((n.clone(), i.bytes?))).collect())
     }
 
     /// Stops measuring and shows no sizes (a place that isn't a folder, or
@@ -208,13 +227,19 @@ fn work(queue: &(Mutex<Option<Job>>, Condvar), tx: &UnboundedSender<Batch>) {
     }
 }
 
-async fn publish(out: Shared, local: Rc<RefCell<Local>>, mut rx: UnboundedReceiver<Batch>) {
+async fn publish(
+    out: Shared,
+    local: Rc<RefCell<Local>>,
+    mut rx: UnboundedReceiver<Batch>,
+    done_tx: UnboundedSender<PathBuf>,
+) {
     while let Some(first) = rx.next().await {
         let mut batches = vec![first];
         while let Ok(more) = rx.try_recv() {
             batches.push(more);
         }
         let mut l = local.borrow_mut();
+        let was_done = l.done;
         let mut changed = false;
         for batch in batches {
             if batch.generation != l.generation {
@@ -239,6 +264,11 @@ async fn publish(out: Shared, local: Rc<RefCell<Local>>, mut rx: UnboundedReceiv
         }
         if changed {
             publish_now(&out, &l);
+            if l.done && !was_done {
+                if let Some(folder) = &l.folder {
+                    let _ = done_tx.unbounded_send(folder.clone());
+                }
+            }
         }
     }
 }

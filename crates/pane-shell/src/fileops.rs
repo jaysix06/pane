@@ -341,6 +341,22 @@ pub fn check_name(name: &str) -> std::result::Result<(), String> {
 }
 
 /// "New folder", or "New folder (2)" and so on if taken, in `parent`.
+/// A file name not taken in `parent`: `stem.ext`, else `stem (2).ext`, as
+/// Explorer numbers new files.
+pub fn unique_file_name(parent: &Path, stem: &str, ext: &str) -> String {
+    let name = |n: Option<u32>| match (n, ext.is_empty()) {
+        (None, true) => stem.to_string(),
+        (None, false) => format!("{stem}.{ext}"),
+        (Some(n), true) => format!("{stem} ({n})"),
+        (Some(n), false) => format!("{stem} ({n}).{ext}"),
+    };
+    std::iter::once(None)
+        .chain((2..10_000).map(Some))
+        .map(name)
+        .find(|n| !parent.join(n).exists())
+        .unwrap_or_else(|| name(None))
+}
+
 pub fn unique_name(parent: &Path, base: &str) -> String {
     if !parent.join(base).exists() {
         return base.to_string();
@@ -352,6 +368,17 @@ pub fn unique_name(parent: &Path, base: &str) -> String {
 mod tests {
     use super::*;
     use std::sync::Mutex;
+
+    #[test]
+    fn unique_file_names_number_before_the_extension() {
+        let d = temp("unique-file");
+        assert_eq!(unique_file_name(&d, "New Text Document", "txt"), "New Text Document.txt");
+        std::fs::write(d.join("New Text Document.txt"), "").unwrap();
+        assert_eq!(unique_file_name(&d, "New Text Document", "txt"), "New Text Document (2).txt");
+        std::fs::write(d.join("New Text Document (2).txt"), "").unwrap();
+        assert_eq!(unique_file_name(&d, "New Text Document", "txt"), "New Text Document (3).txt");
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     fn temp(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("pane-ops-{}-{name}", std::process::id()));

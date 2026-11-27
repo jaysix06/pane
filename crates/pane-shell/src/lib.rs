@@ -9,9 +9,13 @@ mod context_menu;
 #[cfg(windows)]
 pub mod default_app;
 #[cfg(windows)]
+mod devices;
+#[cfg(windows)]
 pub mod fileops;
 #[cfg(windows)]
 mod icons;
+#[cfg(windows)]
+mod log;
 #[cfg(windows)]
 mod places;
 #[cfg(windows)]
@@ -21,6 +25,10 @@ mod win;
 pub use context_menu::{MenuOutcome, show_background_menu, show_context_menu};
 #[cfg(windows)]
 pub use icons::{Icon, icon_rgba, thumbnail_rgba};
+#[cfg(windows)]
+pub use devices::watch_devices;
+#[cfg(windows)]
+pub use log::log_to_file;
 #[cfg(windows)]
 pub use places::{Drive, DriveKind, Place, drives, is_network_path, known_folders};
 #[cfg(windows)]

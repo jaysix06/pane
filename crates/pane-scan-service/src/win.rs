@@ -2,11 +2,13 @@ use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use pane_scan::Event;
+use pane_scan::find::{FindReply, FindRequest, Matcher};
 use pane_scan::ipc::{self, Request};
+use pane_scan::mft::Table;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HLOCAL, LocalFree};
 use windows::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
@@ -359,6 +361,10 @@ fn answer(mut pipe: Pipe) -> Result<(), String> {
     };
     // Whose profile is the caller's: their files are named, others' aren't.
     let own = client_profile(&pipe);
+    let volume = match request {
+        Request::Scan(volume) => volume,
+        Request::Find(find) => return answer_find(pipe, find, own),
+    };
 
     let pipe = std::sync::Mutex::new(pipe);
     let cancel = AtomicBool::new(false);
@@ -370,10 +376,98 @@ fn answer(mut pipe: Pipe) -> Result<(), String> {
             cancel.store(true, Ordering::Relaxed);
         }
     };
-    if let Err(e) = pane_scan::mft::scan(&request.scan, own, &report, &cancel) {
+    if let Err(e) = pane_scan::mft::scan(&volume, own, &report, &cancel) {
         report(Event::Error(e.clone()));
         return Err(e);
     }
+    Ok(())
+}
+
+/// The table a find read, kept for the next one (each keystroke of a
+/// search asks again): one drive's, while it is younger than `TABLE_KEEP`.
+/// The service stops after a minute without requests, and the table goes
+/// with it.
+static TABLE: Mutex<Option<(String, Instant, Arc<Table>)>> = Mutex::new(None);
+const TABLE_KEEP: Duration = Duration::from_secs(90);
+/// Matches sent per line.
+const FIND_BATCH: usize = 500;
+
+/// A find: names on a whole drive. Only what the caller could open
+/// themselves comes back: each match is looked up as the caller
+/// (impersonated), and none is named in another user's profile.
+fn answer_find(mut pipe: Pipe, find: FindRequest, own: Option<String>) -> Result<(), String> {
+    let started = Instant::now();
+    let send = |pipe: &mut Pipe, r: &FindReply| {
+        let mut text = serde_json::to_vec(r).unwrap_or_default();
+        text.push(b'\n');
+        pipe.write_all(&text)
+    };
+    let kept = TABLE
+        .lock()
+        .ok()
+        .and_then(|t| t.as_ref().filter(|(v, at, _)| *v == find.volume && at.elapsed() < TABLE_KEEP).map(|(_, _, t)| t.clone()));
+    let fresh = kept.is_none();
+    let table = match kept {
+        Some(t) => t,
+        None => match pane_scan::mft::read_table(&find.volume, &AtomicBool::new(false)) {
+            Ok(t) => {
+                let t = Arc::new(t);
+                if let Ok(mut slot) = TABLE.lock() {
+                    *slot = Some((find.volume.clone(), Instant::now(), t.clone()));
+                }
+                t
+            }
+            Err(e) => {
+                let _ = send(&mut pipe, &FindReply::Error(e.clone()));
+                return Err(e);
+            }
+        },
+    };
+    let matcher = Matcher::new(&find.query, find.case_sensitive, find.whole_name);
+    // Twice the limit: some won't be the caller's to see.
+    let mut candidates = Vec::new();
+    table.find(&|n| matcher.matches(n), find.hidden, find.max_depth, own.as_deref(), find.limit as usize * 2, &mut |f| {
+        candidates.push(f);
+        true
+    });
+    // SAFETY: impersonation is reverted below, whatever happens between.
+    if unsafe { ImpersonateNamedPipeClient(pipe.0) }.is_err() {
+        let e = "can't check access as the caller".to_string();
+        let _ = send(&mut pipe, &FindReply::Error(e.clone()));
+        return Err(e);
+    }
+    let mut matched = 0u64;
+    let mut batch = Vec::new();
+    let mut gone = false;
+    for f in candidates {
+        if matched as usize >= find.limit as usize {
+            break;
+        }
+        let full = format!("{}\\{}", find.volume, f.path);
+        if std::fs::symlink_metadata(&full).is_err() {
+            continue;
+        }
+        matched += 1;
+        batch.push(f);
+        if batch.len() >= FIND_BATCH {
+            if send(&mut pipe, &FindReply::Found(std::mem::take(&mut batch))).is_err() {
+                gone = true;
+                break;
+            }
+        }
+    }
+    // SAFETY: undoes the impersonation above.
+    unsafe {
+        let _ = RevertToSelf();
+    }
+    if gone {
+        return Ok(());
+    }
+    if !batch.is_empty() {
+        let _ = send(&mut pipe, &FindReply::Found(batch));
+    }
+    let took_ms = started.elapsed().as_millis() as u64;
+    let _ = send(&mut pipe, &FindReply::Done { matched, took_ms, fresh });
     Ok(())
 }
 

@@ -37,6 +37,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(about::restore_from_command_line());
     }
     let start = std::env::args_os().nth(1).map(PathBuf::from).filter(|p| p.is_dir());
+    // A release build has no console: its messages go to the log file
+    // (Settings, Advanced, "Log file"). A debug build keeps the console.
+    #[cfg(not(debug_assertions))]
+    pane_shell::log_to_file(&app::log_path());
 
     let mut application = Application::new();
     // Geist Mono (SIL OFL, assets/fonts) for readouts, paths and numbers.
@@ -188,6 +192,23 @@ fn register_actions(host: &ScriptHost, app: &AppRef, window: zgx_desktop::Window
     });
     on("select_all", |a, _| app::select_all(a));
     on("select_none", |a, _| app::select_none(a));
+    // Drag-select: { keep } to start, { ranges = { {from, to}, ... } } (rows
+    // from 1) as it moves, nothing at the end.
+    on("marquee_begin", |a, arg| app::marquee_begin(a, flag(arg, "keep")));
+    on("marquee", |a, arg| {
+        let ranges: Vec<(usize, usize)> = match arg.field("ranges") {
+            Some(Value::List(items)) => items
+                .iter()
+                .filter_map(|r| match r {
+                    Value::List(p) if p.len() == 2 => Some((index_arg(&p[0])?, index_arg(&p[1])?)),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        app::marquee(a, &ranges);
+    });
+    on("marquee_end", |a, _| app::marquee_end(a));
     on("move", |a, arg| {
         let by = match arg.field("key").and_then(str_arg) {
             Some("ArrowUp") => Move::Up,
@@ -248,6 +269,7 @@ fn register_actions(host: &ScriptHost, app: &AppRef, window: zgx_desktop::Window
         app::reset_settings(a, &refs);
     });
     on("open_settings_folder", |a, _| app::open_settings_folder(a));
+    on("open_log", |_, _| app::open_log());
     on("export_settings", |a, arg| {
         if let Some(p) = str_arg(arg) {
             app::export_settings(a, std::path::Path::new(p));
@@ -326,6 +348,12 @@ fn register_ops_actions(host: &ScriptHost, app: &AppRef, ops: &ops::OpsRef) {
         }
     });
     on("new_folder", |a, o, _| ops::new_folder(o, a));
+    // The New menu: "text" or "markdown".
+    on("new_file", |a, o, arg| {
+        if let Some(kind) = str_arg(arg) {
+            ops::new_file(o, a, kind);
+        }
+    });
     // The footer's operations: { id, paused }, an id, nothing.
     on("op_pause", |_, o, arg| {
         if let Some(id) = arg.field("id").and_then(num_arg) {
@@ -357,6 +385,11 @@ fn register_ops_actions(host: &ScriptHost, app: &AppRef, ops: &ops::OpsRef) {
     // selection when it is part of it).
     on("context_menu", |a, o, arg| {
         let Some(i) = index_arg(arg) else { return };
+        // Inside a zip there is nothing on disk for the shell's menu.
+        if app::showing_zip(a) {
+            app::ensure_selected(a, i);
+            return;
+        }
         // The row right-clicked is selected first, and drawn so before the
         // menu opens: right-clicking another item while a menu is open
         // moves the highlight to it, so it's clear which item the menu is for.
@@ -381,7 +414,7 @@ fn register_ops_actions(host: &ScriptHost, app: &AppRef, ops: &ops::OpsRef) {
     });
     // Right-click on empty space: the folder's own menu (New, Paste, …).
     on("background_menu", |a, o, _| {
-        if !matches!(a.borrow().tab().history.current, Location::Folder(_)) {
+        if !matches!(a.borrow().tab().history.current, Location::Folder(_)) || app::showing_zip(a) {
             return;
         }
         app::select_none(a);

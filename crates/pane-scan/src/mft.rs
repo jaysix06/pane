@@ -297,6 +297,8 @@ pub struct Table {
     modified: Vec<u64>,
     name_at: Vec<(u32, u16)>,
     names: String,
+    /// HIDDEN and SYSTEM from the attributes (for finds).
+    attrs: Vec<u8>,
 }
 
 /// The non-name fields `add_parts` reads.
@@ -311,6 +313,10 @@ struct Rec {
 const IN_USE: u8 = 1;
 const DIR: u8 = 2;
 const NAMED: u8 = 4;
+const HIDDEN: u8 = 1;
+const SYSTEM: u8 = 2;
+/// Records below this are NTFS's own ($MFT, $LogFile, ...), never shown.
+const FIRST_USER_RECORD: usize = 24;
 
 impl Table {
     pub fn with_capacity(n: usize) -> Table {
@@ -321,6 +327,7 @@ impl Table {
             modified: vec![0; n],
             name_at: vec![(0, 0); n],
             names: String::with_capacity(n * 16),
+            attrs: vec![0; n],
         }
     }
 
@@ -331,6 +338,7 @@ impl Table {
             self.size.resize(n, 0);
             self.modified.resize(n, 0);
             self.name_at.resize(n, (0, 0));
+            self.attrs.resize(n, 0);
         }
     }
 
@@ -373,6 +381,8 @@ impl Table {
         if is_base {
             self.flags[idx] |= IN_USE | if r.dir { DIR } else { 0 };
             self.modified[idx] = r.modified;
+            self.attrs[idx] = (if r.attributes & 0x2 != 0 { HIDDEN } else { 0 })
+                | (if r.attributes & 0x4 != 0 { SYSTEM } else { 0 });
             if r.attributes & (0x1000 | 0x40_0000) != 0 {
                 self.size[idx] = 0;
             }
@@ -425,6 +435,118 @@ impl Table {
         }
     }
 
+    /// Every item whose name `matches`, as paths below the root, with what
+    /// a search result shows. Leaves out NTFS's own files, items in other
+    /// users' profiles (`own_profile` "users\me", as the Overview does),
+    /// and without `hidden`, hidden or system items and everything inside
+    /// a hidden folder. At most `limit`, each given to `found`, which
+    /// returns false to stop. Returns how many were given.
+    pub fn find(
+        &self,
+        matches: &dyn Fn(&str) -> bool,
+        hidden: bool,
+        max_depth: u32,
+        own_profile: Option<&str>,
+        limit: usize,
+        found: &mut dyn FnMut(crate::find::Found) -> bool,
+    ) -> u64 {
+        let own_user = own_profile.and_then(|p| p.rsplit('\\').next()).map(str::to_lowercase);
+        // Folders already looked up: their path and whether it's hidden.
+        let mut folders: std::collections::HashMap<usize, Option<(Box<str>, bool, u32)>> = Default::default();
+        let mut given = 0u64;
+        for i in FIRST_USER_RECORD..self.parent.len() {
+            let f = self.flags[i];
+            if f & IN_USE == 0 || f & NAMED == 0 || i as u32 == ROOT {
+                continue;
+            }
+            let own_hidden = self.attrs[i] & (HIDDEN | SYSTEM) != 0;
+            if !hidden && own_hidden {
+                continue;
+            }
+            let name = self.name(i);
+            if !matches(name) {
+                continue;
+            }
+            let Some((dir, dir_hidden, depth)) = self.folder_info(self.parent[i] as usize, &mut folders) else {
+                continue;
+            };
+            if (!hidden && dir_hidden) || depth > max_depth {
+                continue;
+            }
+            let path = if dir.is_empty() { name.to_string() } else { format!("{dir}\\{name}") };
+            if let Some(user) = &own_user
+                && is_other_profile(&path, user)
+            {
+                continue;
+            }
+            given += 1;
+            let item = crate::find::Found {
+                path,
+                dir: f & DIR != 0,
+                size: if f & DIR != 0 { 0 } else { self.size[i] },
+                modified: self.modified[i],
+                hidden: self.attrs[i] & HIDDEN != 0,
+                system: self.attrs[i] & SYSTEM != 0,
+            };
+            if !found(item) || given as usize >= limit {
+                break;
+            }
+        }
+        given
+    }
+
+    /// Folder `i`'s path ("" for the root), whether it or a folder above it
+    /// is hidden, and how deep it is (0 for the root); None for a broken
+    /// chain. Memoized in `memo`.
+    fn folder_info(
+        &self,
+        i: usize,
+        memo: &mut std::collections::HashMap<usize, Option<(Box<str>, bool, u32)>>,
+    ) -> Option<(Box<str>, bool, u32)> {
+        if i == ROOT as usize {
+            return Some(("".into(), false, 0));
+        }
+        if let Some(known) = memo.get(&i) {
+            return known.clone();
+        }
+        let info = (|| {
+            if i >= self.parent.len() || self.flags[i] & (NAMED | DIR) != (NAMED | DIR) {
+                return None;
+            }
+            // Iteratively up to a known folder, then back down.
+            let mut chain = vec![i];
+            let mut cur = self.parent[i] as usize;
+            let base = loop {
+                if cur == ROOT as usize {
+                    break ("".into(), false, 0u32);
+                }
+                if let Some(known) = memo.get(&cur) {
+                    break known.clone()?;
+                }
+                if cur >= self.parent.len() || self.flags[cur] & NAMED == 0 || chain.len() > 4096 {
+                    return None;
+                }
+                chain.push(cur);
+                cur = self.parent[cur] as usize;
+            };
+            let (mut path, mut hid, mut depth): (String, bool, u32) = (base.0.into(), base.1, base.2);
+            while let Some(d) = chain.pop() {
+                if !path.is_empty() {
+                    path.push('\\');
+                }
+                path.push_str(self.name(d));
+                hid |= self.attrs[d] & (HIDDEN | SYSTEM) != 0;
+                depth += 1;
+                memo.insert(d, Some((path.as_str().into(), hid, depth)));
+            }
+            Some((path.into_boxed_str(), hid, depth))
+        })();
+        if info.is_none() {
+            memo.insert(i, None);
+        }
+        info
+    }
+
     /// The path of folder `i` ("" for the root), memoized; None for a
     /// broken chain.
     fn dir_path<'a>(&self, i: usize, paths: &'a mut Vec<Option<Box<str>>>, stack: &mut Vec<usize>) -> Option<&'a str> {
@@ -459,7 +581,27 @@ impl Table {
     }
 }
 
+/// Whether `path` (below the root) is in a profile other than `user`'s,
+/// as the Overview counts them.
+fn is_other_profile(path: &str, user: &str) -> bool {
+    let mut parts = path.split('\\');
+    let (Some(first), Some(second)) = (parts.next(), parts.next()) else { return false };
+    if !first.eq_ignore_ascii_case("users") {
+        return false;
+    }
+    let second = second.to_lowercase();
+    // "C:\Users\other" itself is a folder name anyone sees in Explorer.
+    parts.next().is_some() && !matches!(second.as_str(), "public" | "default" | "default user" | "all users") && second != user
+}
+
 // ---------------------------------------------------------------- reading
+
+/// Reads `volume`'s whole table (for finds), without progress.
+#[cfg(windows)]
+pub fn read_table(volume: &str, cancel: &AtomicBool) -> Result<Table, String> {
+    let mut vol = Volume::open(volume)?;
+    vol.read_table(&|_| {}, cancel)
+}
 
 /// Scans `volume` ("C:") from its MFT, reporting progress and the result.
 /// `own_profile` ("users\\me") hides other users' files by name. Returns
@@ -705,6 +847,48 @@ pub fn scan(_volume: &str, _own: Option<String>, _report: &Report<'_>, _cancel: 
 mod tests {
     use super::*;
     use crate::model::Category;
+
+    #[test]
+    fn find_names_paths_and_keeps_out_what_it_should() {
+        let mut t = Table::with_capacity(64);
+        let mut add = |n: u64, dir: bool, attrs: u32, parent: u64, name: &str| {
+            t.add_parts(n, true, dir, 0, Some(10), 7, attrs, Some((parent, name)));
+        };
+        add(5, true, 0, 5, ".");
+        add(30, true, 0, 5, "Users");
+        add(31, true, 0, 30, "me");
+        add(32, false, 0, 31, "report.txt");
+        add(33, true, 0, 30, "other");
+        add(34, false, 0, 33, "report.doc");
+        add(35, true, 0x2, 31, "AppData");
+        add(36, false, 0, 35, "report.log");
+        add(37, false, 0, 5, "Report.pdf");
+        add(38, false, 0x2, 31, "report.hidden");
+        add(10, false, 0, 5, "$report"); // NTFS's own
+        let m = crate::find::Matcher::new("report", false, false);
+        let run = |hidden: bool, depth: u32| {
+            let mut out = Vec::new();
+            t.find(&|n| m.matches(n), hidden, depth, Some(r"users\me"), 100, &mut |f| {
+                out.push(f.path);
+                true
+            });
+            out.sort();
+            out
+        };
+        assert_eq!(run(false, 32), ["Report.pdf", r"Users\me\report.txt"]);
+        assert_eq!(
+            run(true, 32),
+            ["Report.pdf", r"Users\me\AppData\report.log", r"Users\me\report.hidden", r"Users\me\report.txt"]
+        );
+        assert_eq!(run(false, 0), ["Report.pdf"], "depth 0: the root only");
+        let mut n = 0;
+        t.find(&|x| m.matches(x), true, 32, None, 2, &mut |_| {
+            n += 1;
+            true
+        });
+        assert_eq!(n, 2, "the limit holds");
+    }
+
 
     /// Builds a 1024-byte FILE record with the given attributes, sectors
     /// protected by an update sequence as NTFS writes them.

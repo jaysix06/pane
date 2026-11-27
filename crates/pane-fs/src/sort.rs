@@ -79,6 +79,12 @@ impl Default for SortOptions {
 /// Sorts by `opts.key`, ties broken by name; folders stay first whichever
 /// way it runs when `folders_first` is set.
 pub fn sort_entries(entries: &mut [Entry], opts: SortOptions) {
+    sort_entries_by_size(entries, opts, |e| e.size);
+}
+
+/// As [`sort_entries`], with each entry's size for a Size sort given by
+/// `size`: folders sized by what's inside them, which a listing doesn't know.
+pub fn sort_entries_by_size(entries: &mut [Entry], opts: SortOptions, size: impl Fn(&Entry) -> u64) {
     let names = |a: &Entry, b: &Entry| {
         if opts.natural {
             natural_cmp(&a.name, &b.name)
@@ -97,7 +103,7 @@ pub fn sort_entries(entries: &mut [Entry], opts: SortOptions) {
             SortKey::Name => Ordering::Equal,
             SortKey::Modified => a.modified.cmp(&b.modified),
             SortKey::Type => a.extension().cmp(&b.extension()),
-            SortKey::Size => a.size.cmp(&b.size),
+            SortKey::Size => size(a).cmp(&size(b)),
         }
         .then_with(|| names(a, b));
         if opts.descending { ord.reverse() } else { ord }
@@ -113,6 +119,27 @@ mod tests {
         let mut names = vec!["file10", "file2", "File1", "file02", "a", "B"];
         names.sort_by(|a, b| natural_cmp(a, b));
         assert_eq!(names, ["a", "B", "File1", "file2", "file02", "file10"]);
+    }
+
+    #[test]
+    fn size_sort_takes_folder_sizes_given() {
+        let e = |name: &str, is_dir: bool, size: u64| Entry {
+            name: name.into(),
+            is_dir,
+            size,
+            modified: 0,
+            hidden: false,
+            system: false,
+        };
+        let mut v = vec![e("small", true, 0), e("big", true, 0), e("f", false, 5)];
+        let opts = SortOptions { key: SortKey::Size, descending: true, folders_first: true, natural: true };
+        sort_entries_by_size(&mut v, opts, |x| match x.name.as_str() {
+            "big" => 900,
+            "small" => 10,
+            _ => x.size,
+        });
+        let names: Vec<&str> = v.iter().map(|x| x.name.as_str()).collect();
+        assert_eq!(names, ["big", "small", "f"]);
     }
 
     #[test]

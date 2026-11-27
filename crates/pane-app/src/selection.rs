@@ -10,6 +10,9 @@ pub struct Selection {
     anchor: Option<usize>,
     /// The row the keyboard is on.
     focus: Option<usize>,
+    /// While a drag-select runs: what was selected when it started (kept
+    /// with Ctrl or Shift held, else empty).
+    marquee_base: Option<BTreeSet<usize>>,
 }
 
 /// A key that moves the focus.
@@ -69,6 +72,42 @@ impl Selection {
         }
     }
 
+    /// A drag-select starts: with `keep` (Ctrl or Shift held) the rows
+    /// selected now stay selected, else the selection starts empty.
+    pub fn begin_marquee(&mut self, keep: bool) {
+        let base = if keep { self.set.clone() } else { BTreeSet::new() };
+        self.set = base.clone();
+        self.marquee_base = Some(base);
+    }
+
+    /// The drag-select's rectangle covers `ranges` (inclusive, rows under
+    /// `len`): those rows plus what was kept. The focus goes to the last
+    /// row it reached.
+    pub fn marquee(&mut self, ranges: &[(usize, usize)], len: usize) {
+        let mut set = self.marquee_base.clone().unwrap_or_default();
+        let mut last = None;
+        for &(a, b) in ranges {
+            let (a, b) = (a.min(b), a.max(b));
+            if a >= len {
+                continue;
+            }
+            let b = b.min(len - 1);
+            set.extend(a..=b);
+            last = Some(b);
+        }
+        self.set = set;
+        if let Some(l) = last {
+            self.focus = Some(l);
+            if self.anchor.is_none() {
+                self.anchor = Some(l);
+            }
+        }
+    }
+
+    pub fn end_marquee(&mut self) {
+        self.marquee_base = None;
+    }
+
     pub fn select_all(&mut self, len: usize) {
         self.set = (0..len).collect();
         if self.focus.is_none() && len > 0 {
@@ -109,6 +148,7 @@ impl Selection {
             set: self.set.iter().filter_map(|&i| find(i)).collect(),
             anchor: self.anchor.and_then(find),
             focus: self.focus.and_then(find),
+            marquee_base: None,
         }
     }
 }
@@ -194,6 +234,24 @@ mod tests {
         let r = s.remap(&old, &new);
         assert_eq!(sel(&r), [0, 2]);
         assert_eq!(r.focus(), Some(0), "focus followed c");
+    }
+
+    #[test]
+    fn marquee_selects_ranges_and_keeps_with_ctrl() {
+        let mut s = Selection::default();
+        s.click(8, false, false);
+        s.begin_marquee(false);
+        assert!(sel(&s).is_empty(), "a plain drag starts empty");
+        s.marquee(&[(2, 4)], 10);
+        assert_eq!(sel(&s), [2, 3, 4]);
+        s.marquee(&[(3, 2)], 10);
+        assert_eq!(sel(&s), [2, 3], "shrinks back as the rectangle does");
+        s.end_marquee();
+        s.begin_marquee(true);
+        s.marquee(&[(0, 0), (6, 20)], 10);
+        assert_eq!(sel(&s), [0, 2, 3, 6, 7, 8, 9], "kept rows stay, ranges clamp to len");
+        s.marquee(&[(15, 20)], 10);
+        assert_eq!(sel(&s), [2, 3], "out of range adds nothing");
     }
 
     #[test]
