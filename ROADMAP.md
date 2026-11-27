@@ -1,8 +1,8 @@
 # Pane roadmap
 
-Where Pane is and what comes next. Latest release: **0.2.1** (0.2.0 plus a tab-closing fix: Settings, folder search, session restore, the folder view redesign, and Milestone 6's polish and performance).
+Where Pane is and what comes next. Latest release: **0.3.0** (drag-select, resizable columns and preview pane, item checkboxes, instant whole-drive search, zip browsing and more; 0.2.x brought Settings, folder search, session restore, the folder view redesign, and Milestone 6's polish and performance).
 
-**Unreleased (after 0.2.1):** drag-select, resizable columns and preview pane, item checkboxes, a New menu, folders sorted by measured size, dates that change at midnight, a log file, grid names that wrap, drives that show as they arrive, code highlighting in the preview, instant whole-drive search, and browsing inside zip files (each below). Built and tested in code (unit tests, a release build, the service's find end to end); **none of it has been checked on screen in the dev build yet**. Seen once while checking: `meter.luau:221` warns that a drive meter's animation keeps restarting; it shows on some launches and not others, with or without these changes.
+**In 0.3.0:** drag-select, resizable columns and preview pane, item checkboxes, a New menu, folders sorted by measured size, dates that change at midnight, a log file, grid names that wrap, drives that show as they arrive, code highlighting in the preview, instant whole-drive search, and browsing inside zip files (each below). Built and tested in code (unit tests, a release build, the service's find end to end); **none of it has been checked on screen in the dev build yet**. Seen once while checking: `meter.luau:221` warns that a drive meter's animation keeps restarting; it shows on some launches and not others, with or without these changes.
 
 ## Done
 
