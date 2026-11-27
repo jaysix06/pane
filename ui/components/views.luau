@@ -324,6 +324,9 @@ type Gesture = {
 	moved: boolean,
 	sent: string,
 	stop_scroll: (() -> ())?,
+	-- The folder it started in: opening another (a double-click's second
+	-- press is also a press here) ends it, as the release may never come.
+	path: string,
 }
 local gesture: Gesture? = nil
 -- An item's icon or name took this press: the list doesn't start a rectangle.
@@ -497,9 +500,18 @@ local function finish(_e: any)
 	end
 end
 
+local function here(): string
+	local n = state.nav:peek()
+	return if n then n.path else ""
+end
+
 local function follow(e: any)
 	local g = gesture
 	if not g then
+		return
+	end
+	if g.path ~= here() then
+		finish(nil)
 		return
 	end
 	g.px, g.py = e.x, e.y
@@ -572,6 +584,7 @@ local function list_press(e: any)
 		moved = false,
 		sent = "",
 		stop_scroll = nil,
+		path = here(),
 	}
 	state.root_pointer.move = follow
 	state.root_pointer.release = finish
@@ -694,6 +707,9 @@ local function item_handlers(index: () -> number, row: () -> state.Row, whole: b
 			end
 		end,
 		on_double_click = function()
+			-- Its second press may have started a drag-select; the folder
+			-- that opens would get it.
+			finish(nil)
 			ui.invoke("open", index())
 		end,
 		on_aux_click = function(e)
