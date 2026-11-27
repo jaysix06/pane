@@ -1,6 +1,6 @@
 # Pane roadmap
 
-Where Pane is and what comes next. Latest release: **0.1.3** (thumbnails, preview pane, About, default file manager).
+Where Pane is and what comes next. Latest release: **0.2.0** (Settings, folder search, session restore, the folder view redesign, and Milestone 6's polish and performance).
 
 ## Done
 
@@ -35,7 +35,7 @@ Left for later from Milestone 5:
 
 ## Next: Folder view redesign (A, B, C)
 
-Three changes to the folder view, mocked up at https://claude.ai/artifact/5YA5RmgsAq3oj69kGALnRH (private to the owner). They keep Pane Amber, the LED dot-matrix and the keyboard model. Build them in this order; each can ship on its own. **Status: A, B and C are built and checked in the dev build (not released yet).** Check each one in the running dev build (`target\debug\pane.exe`, not the installed copy).
+Three changes to the folder view, mocked up at https://claude.ai/artifact/5YA5RmgsAq3oj69kGALnRH (private to the owner). They keep Pane Amber, the LED dot-matrix and the keyboard model. Build them in this order; each can ship on its own. **Status: A, B and C are built and released in 0.2.0.** Check each one in the running dev build (`target\debug\pane.exe`, not the installed copy).
 
 ### A. A command bar that follows the selection
 
