@@ -53,6 +53,8 @@ local paths: { [string]: string } = {
 	rename = "M4 17.5V20h2.5L17.8 8.7l-2.5-2.5zM14 7.5l2.5 2.5M13 20h7",
 	folder_plus = "M3.5 7.5V18a1 1 0 0 0 1 1h15a1 1 0 0 0 1-1V9.5a1 1 0 0 0-1-1h-7l-2-2.5h-6a1 1 0 0 0-1 1zM12 11.5v5M9.5 14h5",
 	warning = "M12 4l9 15.5H3zM12 10v4.5M12 17h.01",
+	pause = "M9 6v12M15 6v12",
+	play = "M8 5.5v13l10.5-6.5z",
 }
 
 M.names = paths

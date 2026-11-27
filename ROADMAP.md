@@ -35,7 +35,7 @@ Left for later from Milestone 5:
 
 ## Next: Folder view redesign (A, B, C)
 
-Three changes to the folder view, mocked up at https://claude.ai/artifact/5YA5RmgsAq3oj69kGALnRH (private to the owner). They keep Pane Amber, the LED dot-matrix and the keyboard model. Build them in this order; each can ship on its own. **Status: A is built (not yet committed or released); B and C are next.** Check each one in the running dev build (`target\debug\pane.exe`, not the installed copy).
+Three changes to the folder view, mocked up at https://claude.ai/artifact/5YA5RmgsAq3oj69kGALnRH (private to the owner). They keep Pane Amber, the LED dot-matrix and the keyboard model. Build them in this order; each can ship on its own. **Status: A, B and C are built and checked in the dev build (not released yet).** Check each one in the running dev build (`target\debug\pane.exe`, not the installed copy).
 
 ### A. A command bar that follows the selection
 
@@ -53,19 +53,28 @@ The toolbar shows ten unlabeled icons at all times, half of them disabled with n
 
 ### B. A list you can read at a glance
 
-- [ ] Relative dates: "Today 9:26 AM", "Yesterday 4:10 PM", "Mon 10:37 PM" within a week, then "Nov 12" (and "Nov 12, 2025" in other years). Full timestamp in the tooltip. A setting keeps the old absolute format. An amber dot marks changes in the last hour.
-- [ ] A Kind column replaces Type: folders show their item count ("9 items", counted lazily); files show a readable kind ("Markdown", "Lockfile") and a small mono extension tag after the name.
-- [ ] Group headers when folders-first is on and sorted by name: "FOLDERS 8 ··· 5.0 GB" and "FILES 6 ··· 147 KB".
-- [ ] Folder sizes with a 10-LED bar showing each folder's share of the current folder. **Needs new work:** the scan cache (`pane-scan` `ScanResult`) keeps only top items per category, not a size per folder. Plan: a background size worker like `thumbs.rs` (LIFO queue, generation counter, cancelled on navigation), leaving the cell blank until known; consider caching results by path + modified time.
-- Files: `crates/pane-app/src/app.rs` (`row_text`, `ListOptions`), a new `crates/pane-app/src/sizes.rs`, `ui/components/views.luau`, `ui/components/meter.luau`, settings for the date format.
+- [x] Friendly dates: "Today 9:26 AM", "Yesterday 4:10 PM", "Mon 10:37 PM" within a week, then "Nov 12" ("Nov 12, 2025" in other years). The full timestamp is the tooltip. An amber dot and brighter text mark changes in the last hour. Setting: Files & folders → "Friendly dates" (`relative_dates`). Logic in `pane-fs/src/date.rs`, tested.
+- [x] The Type column is now Kind: subfolders show their item count ("9 items", "Empty"); files show a readable kind ("Markdown", "Lockfile", "Git file"; `kind_name` in `app.rs`, tested). When names hide extensions, the extension shows as a small mono tag after the name.
+- [x] Group headers in details view when folders come first, in folders (not search, This PC or the Overview): "FOLDERS 8 ──── 21 GB" ("Measuring…" until done) and "FILES 6 ──── 148 KB". Done with the list's per-row `heights` (the first folder and first file rows are taller), so row indexes, selection and keys are unchanged. Skipped past 20,000 rows.
+- [x] Folder sizes: `crates/pane-app/src/sizes.rs` measures the folder on screen on one background thread (lowered CPU and disk priority): item counts first, then sizes (`pane_fs::folder_size`, which doesn't follow junctions or symlinks), published as `shared("sizes")`. Ten LEDs show each folder's share of the folder, rounded to tenths, once every size is known. A new folder cancels the walk; sizes are kept 2 minutes. Not on network drives. Setting: "Show folder sizes" (`folder_sizes`). Home (56 folders, 135 GB) takes about 41 s here; the project folder is instant.
+- [ ] Later: sorting by size doesn't use measured folder sizes yet (folders still sort as 0 bytes).
+- [ ] Later: friendly dates are worked out when a folder is listed, so "Today" stays "Today" past midnight until the folder is listed again.
+- [ ] Later: a change deep inside a subfolder shows up in its size only after the 2-minute cache ends.
+- Files: `crates/pane-fs/src/date.rs`, `crates/pane-fs/src/size.rs`, `crates/pane-app/src/sizes.rs`, `crates/pane-app/src/app.rs` (`row_text`, `kind_name`, `publish_groups`, `request_sizes`), `crates/pane-app/src/settings.rs`, `ui/components/views.luau`, `ui/state.luau` (`sizes`, `groups`, `folder_info`), `ui/settings.luau`.
+- Checked in the dev build: the project folder, Home (sizes, groups, End / Page Up across the FILES header), list view, This PC, search results. Not checked: light theme, a narrow window, a network drive.
 
 ### C. A footer that knows about space
 
-- [ ] The status bar becomes three cells with hairline dividers: selection ("14 items · 3 selected · 13 KB"), running operations, and the drive's free space ("C: [mini LED meter] 124 GB free", category colours as in the Overview; click opens the Overview).
-- [ ] One running copy / move / delete shows inline in the footer: icon, "Copying to D:\Backup", a 24-LED progress bar, percent, time left. Two or more show "2 running"; clicking opens a popover above the footer with today's cards (pause / cancel). The cards no longer cover the file list. Windows' own conflict dialogs are unchanged.
-- [ ] The sidebar drive row gets a readable meter: a 6 px dot row, free space right-aligned in mono, "352 of 476 GB used" below, and a highlight on the current drive.
-- [ ] The operations cell shrinks first when the window narrows.
-- Files: `ui/app.luau` (`status_bar`), `crates/pane-app/src/app.rs` (`status_text` splits into fields), `ui/components/ops_panel.luau`, `ui/components/sidebar.luau`, `ui/components/meter.luau`, `crates/pane-shell/src/places.rs`.
+- [x] The status bar is three cells with hairline dividers: selection ("14 items · 3 selected · 13 KB", from Rust's `shared("status")` = `{ items, selected, size }`), file operations, and the drive's free space ("C: [mini LED meter] 124 GB free", category colours once the Overview has scanned the drive; a click opens the Overview on that drive). On the Overview the footer appears only while an operation runs.
+- [x] One running copy / move / delete shows inline: icon, "Copying to D:\Backup", a 24-LED progress bar, percent, time left ("15 s left", `ops::time_left`, tested; paused time doesn't count). Two or more show "2 running". A click opens a popover above the footer with today's operations, newest first, each with pause / resume and cancel, plus "Clear finished". A finished one stays in the footer 2.5 s (8 s if it failed). The floating cards are gone. Windows' conflict dialogs are unchanged.
+- [x] Pause and cancel: `pane_shell::fileops::Control`, checked before each item and on each progress report. A paused operation waits there; a cancelled one stops before its next item (Windows finishes or rolls back the item in hand).
+- [x] The sidebar drive row: name with free space right-aligned in mono, a one-row LED meter (6 px), "352 of 476 GB used" below; the drive the folder on screen is on gets a bolder name and amber free space. Drives are always published now (the footer needs them); `places.show_drives` hides them in the sidebar. Free space is read again when an operation ends.
+- [x] The operations cell shrinks first when the window narrows.
+- Files: `ui/app.luau` (`status_bar`, `space_cell`), `ui/components/ops_panel.luau` (`cell`, `active`), `ui/components/sidebar.luau` (`drive_row`), `ui/components/meter.luau` (`drive_data`), `ui/components/icons.luau` (pause, play), `ui/state.luau`, `crates/pane-app/src/app.rs` (`status_value`, `used_of`, `refresh_places`), `crates/pane-app/src/ops.rs`, `crates/pane-app/src/main.rs` (`op_pause`, `op_cancel`, `ops_clear`), `crates/pane-shell/src/fileops.rs` (`Control`, `run_with`), `crates/pane-fs/src/date.rs` (`clock`).
+- Checked in the dev build: the footer in a folder (selection cell, drive cell), the sidebar drives, copying 3 × 1.5 GB files (bar, percent, "Done", free space updated right after), copying 6,000 small files (time left, popover, pause holds the copy, Stop cancels it, Cancel in Windows' conflict dialog reads "Cancelled"), a narrow window (the operations label truncates first). Tests: `time_left`, `short_path`, `used_of`, and cancel / pause-then-cancel of a folder copy in `fileops`.
+- Not checked: two operations at once ("2 running"), a failed operation, the Overview's footer, the light theme. Whether Stop interrupts one very large file partway through or waits for the next item.
+- Found while checking: a button labelled "Cancel" inside a zgx popover never runs its on_click (zgx seems to take it as the popover's dismiss button), so the card's button is labelled "Stop". Windows' conflict dialog for a big folder copy comes up behind Pane until Pane's window is clicked (seen once, likely older than this change).
+- Later: "Skip" on every conflict in Windows' dialog may also read "Cancelled" (`GetAnyOperationsAborted`).
 
 ## Milestone 4 follow-ups
 
@@ -81,6 +90,16 @@ The toolbar shows ten unlabeled icons at all times, half of them disabled with n
 - [ ] Bundle the UI scripts into the exe instead of shipping a `ui` folder
 - [ ] Faster memory allocator (mimalloc) and quicker startup (ship Microsoft's shader compiler)
 - [ ] Startup time and memory checks against Explorer
+- Measured 2026-11-27 against File Pilot (release build, median of 5 launches after a warm-up; "ready" = the process's CPU quiet for 500 ms):
+
+  | | Window created | Ready | CPU to ready | Private memory | Idle CPU |
+  |---|---|---|---|---|---|
+  | Pane, 30 files | 47 ms | 1.29 s | 0.66 s | 91 MB | 0.16% |
+  | Pane, 100k files | 59 ms | 1.42 s | 1.20 s | 232 MB | 0.31% |
+  | File Pilot, 30 files | 471 ms | 0.56 s | 1.28 s | 462 MB | 0.31% |
+  | File Pilot, 100k files | 486 ms | 0.72 s | 1.55 s | 454 MB | 0.47% |
+
+  Pane's window exists at once but takes about twice as long to go quiet, so its startup work after the window (scripts, shaders, places, update check) is the thing to cut. "Window created" isn't the first painted frame for either app; that still needs measuring.
 
 ## Smaller leftovers
 

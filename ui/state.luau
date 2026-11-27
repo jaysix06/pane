@@ -9,6 +9,11 @@ export type Row = {
 	dir: boolean,
 	kind: string,
 	date: string,
+	-- The full date for the tooltip, changed in the last hour, and the
+	-- extension as a tag when names hide it ("").
+	date_full: string,
+	recent: boolean,
+	ext: string,
 	size: string,
 	icon: string,
 	-- The thumbnail's host image name (pictures and videos), "" for none.
@@ -33,8 +38,24 @@ export type Nav = {
 	search: string?,
 }
 export type Tab = { id: number, title: string, path: string, loading: boolean }
-export type Place = { label: string, path: string, icon: string, id: string?, used: number?, detail: string?, pinned: boolean? }
-export type Places = { pinned: { Place }, known: { Place }, drives: { Place } }
+-- A drive also has `used` (a fraction), `detail` ("124 GB free of 476 GB"),
+-- `free_text` ("124 GB free") and `used_of` ("352 of 476 GB used").
+export type Place = {
+	label: string,
+	path: string,
+	icon: string,
+	id: string?,
+	used: number?,
+	detail: string?,
+	free_text: string?,
+	used_of: string?,
+	pinned: boolean?,
+}
+-- Drives are always listed (the footer needs them); `show_drives` says
+-- whether the sidebar shows them.
+export type Places = { pinned: { Place }, known: { Place }, drives: { Place }, show_drives: boolean? }
+-- The footer's selection cell: "14 items", "3 selected", "13 KB" ("" when not shown).
+export type Status = { items: string?, selected: string?, size: string? }
 -- The selection: ids, how many, the focused row, files and folders among
 -- them, and the files' total size ("13 KB", "" when not known).
 export type Sel = {
@@ -53,7 +74,7 @@ M.nav = ui.shared("nav", nil :: Nav?)
 M.tabs = ui.shared("tabs", {} :: { Tab })
 M.active = ui.shared("active", 1)
 M.sel = ui.shared("sel", { ids = {}, count = 0, focus = 0 } :: Sel)
-M.status = ui.shared("status", "")
+M.status = ui.shared("status", {} :: Status)
 M.places = ui.shared("places", nil :: Places?)
 M.settings = ui.shared("settings", {} :: { [string]: any })
 M.toast = ui.shared("toast", nil :: { message: string, at: number }?)
@@ -72,6 +93,12 @@ M.update_check = ui.shared("update_check", nil :: string?)
 M.about = ui.shared("about", nil :: any)
 -- File operations in progress (crates/pane-app/src/ops.rs).
 M.ops = ui.shared("ops", {} :: { any })
+-- Subfolder sizes for the folder on screen (crates/pane-app/src/sizes.rs):
+-- { folder, done, total, folders_total, items = { [name] = { count, size,
+-- share } } }, or nil. `share` is -1 until every size is known.
+M.sizes = ui.shared("sizes", nil :: any)
+-- Details view's group headers: { folders, files, files_size }, or nil.
+M.groups = ui.shared("groups", nil :: { folders: number, files: number, files_size: string }?)
 -- Files on the clipboard: { count, cut } ("Paste 2 items").
 M.clipboard = ui.shared("clipboard", { count = 0, cut = false } :: { count: number, cut: boolean })
 -- Cut items: { folder, ids }, dimmed while that folder shows.
@@ -95,6 +122,17 @@ M.view_w = ui.state("view_w", 1000)
 M.list_ref = ui.ref()
 
 -- Small readers.
+-- What's known of subfolder `id` of the folder on screen: { count, size,
+-- share }, or nil.
+function M.folder_info(id: string): any
+	local s = M.sizes:get()
+	local n = M.nav:get()
+	if s == nil or n == nil or n.search or s.folder ~= n.path then
+		return nil
+	end
+	return s.items[id]
+end
+
 function M.view(): string
 	local n = M.nav:get()
 	return if n then n.view else "details"

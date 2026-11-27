@@ -14,6 +14,7 @@ mod selection;
 mod session;
 mod service;
 mod settings;
+mod sizes;
 mod storage;
 mod thumbs;
 mod updates;
@@ -326,6 +327,18 @@ fn register_ops_actions(host: &ScriptHost, app: &AppRef, ops: &ops::OpsRef) {
         }
     });
     on("new_folder", |a, o, _| ops::new_folder(o, a));
+    // The footer's operations: { id, paused }, an id, nothing.
+    on("op_pause", |_, o, arg| {
+        if let Some(id) = arg.field("id").and_then(num_arg) {
+            ops::set_paused(o, id as u64, flag(arg, "paused"));
+        }
+    });
+    on("op_cancel", |_, o, arg| {
+        if let Some(id) = num_arg(arg) {
+            ops::cancel(o, id as u64);
+        }
+    });
+    on("ops_clear", |_, o, _| ops::clear_finished(o));
     // { paths = { ... }, target, copy }: files dropped on a folder.
     on("drop", |a, o, arg| {
         let paths: Vec<PathBuf> = match arg.field("paths") {
@@ -345,34 +358,68 @@ fn register_ops_actions(host: &ScriptHost, app: &AppRef, ops: &ops::OpsRef) {
     // selection when it is part of it).
     on("context_menu", |a, o, arg| {
         let Some(i) = index_arg(arg) else { return };
+        // The row right-clicked is selected first, and drawn so before the
+        // menu opens: right-clicking another item while a menu is open
+        // moves the highlight to it, so it's clear which item the menu is for.
         app::ensure_selected(a, i);
-        let (paths, folder) = {
-            let app = a.borrow();
-            let tab = app.tab();
-            (tab.selected_paths(), tab.history.current.clone())
-        };
-        match pane_shell::show_context_menu(pane_shell::active_window(), &paths) {
-            Ok(pane_shell::MenuOutcome::Rename) => {
-                if let Some(name) = paths.first().and_then(|p| p.file_name()) {
-                    ops::request_rename(o, &name.to_string_lossy());
+        after_a_frame(a, o, |a, o| {
+            let (paths, folder) = {
+                let app = a.borrow();
+                let tab = app.tab();
+                (tab.selected_paths(), tab.history.current.clone())
+            };
+            match pane_shell::show_context_menu(pane_shell::active_window(), &paths) {
+                Ok(pane_shell::MenuOutcome::Rename) => {
+                    if let Some(name) = paths.first().and_then(|p| p.file_name()) {
+                        ops::request_rename(o, &name.to_string_lossy());
+                    }
                 }
+                Ok(pane_shell::MenuOutcome::Invoked(_)) if matches!(folder, Location::Folder(_)) => app::refresh(a),
+                Ok(_) => {}
+                Err(e) => a.borrow().toast(&format!("The menu couldn't open: {e}")),
             }
-            Ok(pane_shell::MenuOutcome::Invoked(_)) if matches!(folder, Location::Folder(_)) => app::refresh(a),
-            Ok(_) => {}
-            Err(e) => a.borrow().toast(&format!("The menu couldn't open: {e}")),
-        }
+        });
     });
     // Right-click on empty space: the folder's own menu (New, Paste, …).
-    on("background_menu", |a, _, _| {
-        let folder = match &a.borrow().tab().history.current {
-            Location::Folder(p) => p.clone(),
-            _ => return,
-        };
+    on("background_menu", |a, o, _| {
+        if !matches!(a.borrow().tab().history.current, Location::Folder(_)) {
+            return;
+        }
         app::select_none(a);
-        match pane_shell::show_background_menu(pane_shell::active_window(), &folder) {
-            Ok(pane_shell::MenuOutcome::Invoked(_)) => app::refresh(a),
-            Ok(_) => {}
-            Err(e) => a.borrow().toast(&format!("The menu couldn't open: {e}")),
+        after_a_frame(a, o, |a, _| {
+            let folder = match &a.borrow().tab().history.current {
+                Location::Folder(p) => p.clone(),
+                _ => return,
+            };
+            match pane_shell::show_background_menu(pane_shell::active_window(), &folder) {
+                Ok(pane_shell::MenuOutcome::Invoked(_)) => app::refresh(a),
+                Ok(_) => {}
+                Err(e) => a.borrow().toast(&format!("The menu couldn't open: {e}")),
+            }
+        });
+    });
+}
+
+thread_local! {
+    /// The newest menu asked for: an older one still waiting doesn't open.
+    static MENU_ASKED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+/// Runs `show` (which opens a shell menu) once the window has drawn the
+/// selection it just got. The menu runs its own message loop and the
+/// window doesn't repaint under it, so opened at once it would sit over
+/// the old highlight.
+fn after_a_frame(a: &AppRef, o: &ops::OpsRef, show: fn(&AppRef, &ops::OpsRef)) {
+    let asked = MENU_ASKED.with(|m| {
+        m.set(m.get() + 1);
+        m.get()
+    });
+    let (a, o) = (a.clone(), o.clone());
+    let tasks = a.borrow().tasks.clone();
+    tasks.spawn(async move {
+        zgx::timer::sleep(Duration::from_millis(40)).await;
+        if MENU_ASKED.with(std::cell::Cell::get) == asked {
+            show(&a, &o);
         }
     });
 }

@@ -15,6 +15,7 @@ local M = {}
 M.open = ui.state("settings_open", false)
 local page = ui.state("settings_page", "general")
 local query = ui.state("settings_query", "")
+local find_focused = ui.state("settings_find_focused", false)
 
 function M.show(which: string?)
 	if which then
@@ -458,6 +459,12 @@ local pages: { Page } = {
 			toggle("show_extensions", "Show file name extensions", "report.pdf rather than report."),
 			toggle("folders_first", "Folders first", "Folders above files, whatever the sort."),
 			toggle("natural_sort", "Sort numbers by value", "file2 before file10, as people count."),
+			toggle("relative_dates", "Friendly dates", "Today 9:26 AM and Mon 10:37 PM rather than 11/26/2026 9:26 AM."),
+			toggle(
+				"folder_sizes",
+				"Show folder sizes",
+				"Works out each folder's size in the background. Not on network drives."
+			),
 			toggle("confirm_delete", "Ask before deleting", "Moving to the Recycle Bin asks first."),
 			toggle(
 				"delete_permanently",
@@ -748,7 +755,9 @@ local function nav(): Node
 			rounded = "$radius.md",
 			bg = "$surface.sunken",
 			border = 1,
-			border_color = "$border.subtle",
+			border_color = function()
+				return if find_focused:get() then "$accent" else "$border.subtle"
+			end,
 			color = "$text.tertiary",
 			icons.icon("search", 14),
 			ui.input {
@@ -762,6 +771,15 @@ local function nav(): Node
 				bg = "#00000000",
 				text_size = 13,
 				caret_color = "$accent",
+				-- The box around it draws the border, amber while focused.
+				border = 0,
+				focus = { border = 0 },
+				on_focus = function()
+					find_focused:set(true)
+				end,
+				on_blur = function()
+					find_focused:set(false)
+				end,
 			},
 		},
 		table.unpack(items),

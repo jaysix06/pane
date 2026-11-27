@@ -21,6 +21,7 @@ use crate::session::{SavedTab, Session};
 use crate::settings::{LoadNote, Settings};
 use crate::preview::{self, Preview};
 use crate::search;
+use crate::sizes::Sizes;
 use crate::thumbs::{self, Thumbs};
 
 pub type AppRef = Rc<RefCell<App>>;
@@ -110,6 +111,9 @@ struct Out {
     toast: Shared,
     /// Files on the clipboard: { count, cut } ("Paste 2 items").
     clipboard: Shared,
+    /// The details view's group headers: { folders, files, files_size }
+    /// when folders come first in a folder, else nil.
+    groups: Shared,
 }
 
 pub struct App {
@@ -122,7 +126,8 @@ pub struct App {
     icons: Icons,
     pub thumbs: Thumbs,
     preview: Preview,
-    tasks: TaskSpawner,
+    sizes: Sizes,
+    pub tasks: TaskSpawner,
     watcher: Option<(PathBuf, pane_fs::Watcher)>,
     watch_tx: UnboundedSender<PathBuf>,
     save_pending: bool,
@@ -152,7 +157,7 @@ impl App {
                     ("focus", Value::from(0.0)),
                 ]),
             ),
-            status: host.shared("status", ""),
+            status: host.shared("status", Value::record::<&str>([])),
             places: host.shared("places", Value::Nil),
             settings: host.shared("settings", json_to_value(&settings.to_json())),
             toast: host.shared("toast", Value::Nil),
@@ -160,6 +165,7 @@ impl App {
                 "clipboard",
                 Value::record([("count", Value::from(0.0)), ("cut", Value::from(false))]),
             ),
+            groups: host.shared("groups", Value::Nil),
         };
         let (icons, icon_loop) = Icons::start(host.clone());
         tasks.spawn(icon_loop);
@@ -167,6 +173,8 @@ impl App {
         tasks.spawn(thumb_loop);
         let (preview, preview_loop) = Preview::start(host.clone());
         tasks.spawn(preview_loop);
+        let (sizes, sizes_loop) = Sizes::start(host);
+        tasks.spawn(sizes_loop);
         let (watch_tx, watch_rx) = unbounded();
         let home = std::env::var_os("USERPROFILE").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("C:\\"));
 
@@ -210,6 +218,7 @@ impl App {
             icons,
             thumbs,
             preview,
+            sizes,
             tasks: tasks.clone(),
             watcher: None,
             watch_tx,
@@ -294,6 +303,12 @@ struct RowText {
     dir: bool,
     kind: String,
     date: String,
+    /// The full date and time, for the date's tooltip.
+    date_full: String,
+    /// Changed in the last hour (the date gets an amber dot).
+    recent: bool,
+    /// The extension, shown as a tag when names hide it ("" for none).
+    ext: String,
     size: String,
     icon: String,
     /// The thumbnail's host image name, "" for none (see thumbs.rs).
@@ -308,6 +323,9 @@ impl RowText {
             ("dir", Value::from(self.dir)),
             ("kind", Value::from(self.kind.as_str())),
             ("date", Value::from(self.date.as_str())),
+            ("date_full", Value::from(self.date_full.as_str())),
+            ("recent", Value::from(self.recent)),
+            ("ext", Value::from(self.ext.as_str())),
             ("size", Value::from(self.size.as_str())),
             ("icon", Value::from(self.icon.as_str())),
             ("thumb", Value::from(self.thumb.as_str())),
@@ -325,6 +343,10 @@ struct ListOptions {
     /// Thumbnails for pictures and videos here (Settings: on, and on
     /// network drives too or not).
     thumbnails: bool,
+    /// Dates as "Today 9:26 AM", seen from `now` (local) / `now_ft`.
+    relative_dates: bool,
+    now: Option<pane_fs::date::LocalTime>,
+    now_ft: u64,
 }
 
 /// (Re)lists tab `index`'s location in the background. With
@@ -341,6 +363,9 @@ pub fn load(app: &AppRef, index: usize, keep_selection: bool) {
             thumbnails: a.settings.thumbnails
                 && (a.settings.thumbnails_network
                     || !a.tabs[index].history.current.folder().is_some_and(pane_shell::is_network_path)),
+            relative_dates: a.settings.relative_dates,
+            now: pane_fs::date::local_time(pane_fs::date::now_filetime()),
+            now_ft: pane_fs::date::now_filetime(),
         };
         let tab = &mut a.tabs[index];
         tab.cancel_search();
@@ -477,6 +502,9 @@ fn list_location(location: &Location, opts: ListOptions) -> Result<Listing, Stri
                         drive_kind(d.kind).into()
                     },
                     date: String::new(),
+                    date_full: String::new(),
+                    recent: false,
+                    ext: String::new(),
                     size: if d.total > 0 { pane_fs::format_size(d.total) } else { String::new() },
                     icon: format!("p:{}", d.root.display()),
                     thumb: String::new(),
@@ -503,18 +531,16 @@ fn row_text(e: &Entry, dir: &Path, opts: &ListOptions, search: bool) -> RowText 
         Some((parent, name)) if search => (name, parent),
         _ => (e.name.as_str(), ""),
     };
-    let kind = if e.is_dir {
-        "File folder".to_string()
-    } else if ext.is_empty() {
-        "File".to_string()
-    } else {
-        format!("{} File", ext.to_ascii_uppercase())
+    let kind = if e.is_dir { "Folder".to_string() } else { kind_name(&ext, shown) };
+    let hide_ext = !opts.show_extensions && !e.is_dir && !ext.is_empty();
+    let name = if hide_ext { shown[..shown.len() - ext.len() - 1].to_string() } else { shown.to_string() };
+    let local = pane_fs::date::local_time(e.modified);
+    let date_full = local.map(|t| pane_fs::date::absolute(&t)).unwrap_or_default();
+    let date = match (local, opts.now) {
+        (Some(then), Some(now)) if opts.relative_dates => pane_fs::date::relative(&then, &now),
+        _ => date_full.clone(),
     };
-    let name = if !opts.show_extensions && !e.is_dir && !ext.is_empty() {
-        shown[..shown.len() - ext.len() - 1].to_string()
-    } else {
-        shown.to_string()
-    };
+    let recent = e.modified != 0 && opts.now_ft >= e.modified && opts.now_ft - e.modified < pane_fs::date::HOUR;
     let kind = if search {
         let top = Location::Folder(dir.to_path_buf()).title();
         if parent.is_empty() { top } else { format!("{top}\\{parent}") }
@@ -526,11 +552,96 @@ fn row_text(e: &Entry, dir: &Path, opts: &ListOptions, search: bool) -> RowText 
         name,
         dir: e.is_dir,
         kind,
-        date: pane_fs::format_modified(e.modified),
+        date,
+        date_full,
+        recent,
+        ext: if hide_ext { ext } else { String::new() },
         size: if e.is_dir { String::new() } else { pane_fs::format_size(e.size) },
         icon: icons::key_for(e, dir),
         thumb: if opts.thumbnails { thumbs::name_for(e, dir) } else { String::new() },
     }
+}
+
+/// A file's kind in words: "Markdown", "Rust source", or "PDF file" for
+/// an extension without a name here.
+fn kind_name(ext: &str, name: &str) -> String {
+    let known = match ext {
+        "" => match name.to_ascii_lowercase().as_str() {
+            "license" | "licence" | "copying" => "License",
+            ".gitignore" | ".gitattributes" | ".gitmodules" => "Git file",
+            ".editorconfig" | ".env" => "Settings file",
+            "makefile" => "Makefile",
+            "dockerfile" => "Dockerfile",
+            _ => "File",
+        },
+        "md" | "markdown" => "Markdown",
+        "txt" | "text" => "Text",
+        "log" => "Log",
+        "rs" => "Rust source",
+        "py" => "Python script",
+        "js" | "mjs" | "cjs" => "JavaScript",
+        "ts" | "mts" => "TypeScript",
+        "tsx" | "jsx" => "React component",
+        "lua" | "luau" => "Luau script",
+        "c" | "h" => "C source",
+        "cpp" | "cc" | "hpp" => "C++ source",
+        "cs" => "C# source",
+        "go" => "Go source",
+        "java" => "Java source",
+        "ps1" => "PowerShell script",
+        "bat" | "cmd" => "Batch script",
+        "sh" => "Shell script",
+        "html" | "htm" => "Web page",
+        "css" => "Stylesheet",
+        "json" => "JSON",
+        "toml" => "TOML",
+        "yaml" | "yml" => "YAML",
+        "xml" => "XML",
+        "csv" => "CSV",
+        "ini" | "cfg" | "conf" => "Settings file",
+        "lock" => "Lockfile",
+        "gitignore" | "gitattributes" => "Git file",
+        "pdf" => "PDF",
+        "doc" | "docx" => "Word document",
+        "xls" | "xlsx" => "Excel workbook",
+        "ppt" | "pptx" => "PowerPoint deck",
+        "jpg" | "jpeg" | "jfif" => "JPEG image",
+        "png" => "PNG image",
+        "gif" => "GIF image",
+        "webp" => "WebP image",
+        "svg" => "SVG image",
+        "bmp" => "Bitmap image",
+        "ico" => "Icon",
+        "heic" | "heif" => "HEIC image",
+        "psd" => "Photoshop image",
+        "mp4" | "m4v" => "MP4 video",
+        "mov" => "QuickTime video",
+        "mkv" => "MKV video",
+        "webm" => "WebM video",
+        "avi" => "AVI video",
+        "mp3" => "MP3 audio",
+        "wav" => "WAV audio",
+        "flac" => "FLAC audio",
+        "m4a" | "aac" => "AAC audio",
+        "ogg" | "opus" => "Ogg audio",
+        "zip" => "ZIP archive",
+        "7z" => "7-Zip archive",
+        "rar" => "RAR archive",
+        "tar" | "gz" | "tgz" | "xz" => "Archive",
+        "exe" => "Application",
+        "msi" => "Installer",
+        "dll" => "Library",
+        "lnk" => "Shortcut",
+        "url" => "Web shortcut",
+        "iso" => "Disc image",
+        "ttf" | "otf" | "woff" | "woff2" => "Font",
+        "blend" => "Blender file",
+        "fbx" | "obj" | "glb" | "gltf" => "3D model",
+        // A long or numbered tail ("tmp.8540.29c7101d5650") isn't a type.
+        _ if ext.len() > 6 || ext.bytes().any(|b| b.is_ascii_digit()) && ext.len() > 4 => "File",
+        _ => return format!("{} file", ext.to_ascii_uppercase()),
+    };
+    known.to_string()
 }
 
 fn friendly_error(dir: &Path, e: &std::io::Error) -> String {
@@ -891,6 +1002,8 @@ fn settings_changed(app: &AppRef, keys: &[&str]) {
         "show_extensions",
         "folders_first",
         "natural_sort",
+        "relative_dates",
+        "folder_sizes",
         "thumbnails",
         "thumbnails_network",
     ];
@@ -1068,7 +1181,8 @@ async fn places_loop(app: AppRef) {
     }
 }
 
-fn refresh_places(app: &AppRef) {
+/// Reads the places and drives again (free space changes after a copy).
+pub fn refresh_places(app: &AppRef) {
     let (tx, rx) = futures_channel::oneshot::channel();
     std::thread::spawn(move || {
         let _ = tx.send((pane_shell::known_folders(), pane_shell::drives()));
@@ -1107,26 +1221,38 @@ fn refresh_places(app: &AppRef) {
         } else {
             Vec::new()
         };
-        let drives: Vec<Value> = if s.sidebar_drives {
-            drives
-                .iter()
-                .map(|d| {
-                    let used = if d.total > 0 { (d.total - d.free) as f64 / d.total as f64 } else { 0.0 };
-                    let detail = if d.total > 0 {
-                        format!("{} free of {}", pane_fs::format_size(d.free), pane_fs::format_size(d.total))
-                    } else {
-                        String::new()
-                    };
-                    place(&d.label, &d.root, vec![("used", Value::from(used)), ("detail", Value::from(detail.as_str()))])
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
+        // Every drive, even with the sidebar's hidden (the footer shows the
+        // current one's free space).
+        let drives: Vec<Value> = drives
+            .iter()
+            .map(|d| {
+                let used = if d.total > 0 { (d.total - d.free) as f64 / d.total as f64 } else { 0.0 };
+                let (detail, free, of) = if d.total > 0 {
+                    (
+                        format!("{} free of {}", pane_fs::format_size(d.free), pane_fs::format_size(d.total)),
+                        format!("{} free", pane_fs::format_size(d.free)),
+                        used_of(d.total - d.free, d.total),
+                    )
+                } else {
+                    Default::default()
+                };
+                place(
+                    &d.label,
+                    &d.root,
+                    vec![
+                        ("used", Value::from(used)),
+                        ("detail", Value::from(detail.as_str())),
+                        ("free_text", Value::from(free.as_str())),
+                        ("used_of", Value::from(of.as_str())),
+                    ],
+                )
+            })
+            .collect();
         a.out.places.set(Value::record([
             ("pinned", Value::List(Rc::from(pinned))),
             ("known", Value::List(Rc::from(known))),
             ("drives", Value::List(Rc::from(drives))),
+            ("show_drives", Value::from(s.sidebar_drives)),
         ]));
     });
 }
@@ -1156,8 +1282,46 @@ fn publish_tabs(app: &AppRef) {
 fn publish_rows(app: &AppRef) {
     let a = app.borrow();
     a.out.rows.set(a.tab().rows.clone());
+    publish_groups(&a);
     drop(a);
+    request_sizes(app);
     publish_selection(app);
+}
+
+/// Folders and files as two groups in details view, when folders come
+/// first in a folder (not search results, This PC or the Overview).
+fn publish_groups(a: &App) {
+    let tab = a.tab();
+    let grouped = a.settings.folders_first && matches!(tab.history.current, Location::Folder(_)) && !tab.entries.is_empty();
+    if !grouped {
+        a.out.groups.set(Value::Nil);
+        return;
+    }
+    let folders = tab.entries.iter().filter(|e| e.is_dir).count();
+    let files = tab.entries.len() - folders;
+    let file_bytes: u64 = tab.entries.iter().filter(|e| !e.is_dir).map(|e| e.size).sum();
+    a.out.groups.set(Value::record([
+        ("folders", Value::from(folders as f64)),
+        ("files", Value::from(files as f64)),
+        ("files_size", Value::from(pane_fs::format_size(file_bytes).as_str())),
+    ]));
+}
+
+/// Sizes of the active tab's subfolders, worked out in the background
+/// (sizes.rs): in folders on local drives, when the setting is on.
+fn request_sizes(app: &AppRef) {
+    let a = app.borrow();
+    let tab = a.tab();
+    let folder = match &tab.history.current {
+        Location::Folder(dir) if a.settings.folder_sizes && !tab.loading && !pane_shell::is_network_path(dir) => dir,
+        _ => {
+            a.sizes.clear();
+            return;
+        }
+    };
+    let names: Vec<String> = tab.entries.iter().filter(|e| e.is_dir).map(|e| e.name.clone()).collect();
+    let file_bytes = tab.entries.iter().filter(|e| !e.is_dir).map(|e| e.size).sum();
+    a.sizes.measure(folder, names, file_bytes);
 }
 
 fn publish_nav(app: &AppRef) {
@@ -1227,7 +1391,7 @@ fn publish_selection(app: &AppRef) {
         ("folders", Value::from(summary.folders as f64)),
         ("size", summary.size.map_or(Value::from(""), |b| Value::from(pane_fs::format_size(b).as_str()))),
     ]));
-    a.out.status.set(Value::from(status_text(tab).as_str()));
+    a.out.status.set(status_value(tab));
     drop(a);
     update_preview(app);
     refresh_clipboard(app);
@@ -1318,7 +1482,9 @@ fn preview_item(tab: &Tab, i: usize) -> Option<preview::Item> {
     })
 }
 
-fn status_text(tab: &Tab) -> String {
+/// The footer's selection cell: `{ items, selected, size }` ("14 items",
+/// "3 selected", "13 KB"; "" when not shown).
+fn status_value(tab: &Tab) -> Value {
     let n = tab.entries.len();
     let items = match (&tab.history.current, tab.loading) {
         (Location::Search { .. }, true) => format!("Searching… {n} found"),
@@ -1328,14 +1494,26 @@ fn status_text(tab: &Tab) -> String {
         _ => format!("{n} items"),
     };
     let selected = tab.selection.len();
-    if selected == 0 {
-        return items;
+    let (selected_text, size) = if selected == 0 {
+        (String::new(), String::new())
+    } else {
+        (format!("{selected} selected"), selection_summary(tab).size.map(pane_fs::format_size).unwrap_or_default())
+    };
+    Value::record([
+        ("items", Value::from(items.as_str())),
+        ("selected", Value::from(selected_text.as_str())),
+        ("size", Value::from(size.as_str())),
+    ])
+}
+
+/// "352 of 476 GB used" (one unit when both share it), else
+/// "820 MB of 1.5 GB used".
+fn used_of(used: u64, total: u64) -> String {
+    let (u, t) = (pane_fs::format_size(used), pane_fs::format_size(total));
+    match (u.rsplit_once(' '), t.rsplit_once(' ')) {
+        (Some((un, uu)), Some((_, tu))) if uu == tu => format!("{un} of {t} used"),
+        _ => format!("{u} of {t} used"),
     }
-    let mut text = format!("{items}   {selected} selected");
-    if let Some(total) = selection_summary(tab).size {
-        text.push_str(&format!("   {}", pane_fs::format_size(total)));
-    }
-    text
 }
 
 // ---------------------------------------------------------------- helpers
@@ -1515,4 +1693,27 @@ fn start_search(app: &AppRef, index: usize, generation: u64, tab_id: u64, root: 
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kinds_read_as_words() {
+        assert_eq!(kind_name("md", "README.md"), "Markdown");
+        assert_eq!(kind_name("lock", "Cargo.lock"), "Lockfile");
+        assert_eq!(kind_name("", "LICENSE"), "License");
+        assert_eq!(kind_name("", ".gitignore"), "Git file");
+        assert_eq!(kind_name("", "notes"), "File");
+        assert_eq!(kind_name("xyz", "a.xyz"), "XYZ file");
+        assert_eq!(kind_name("29c7101d5650", "a.tmp.29c7101d5650"), "File");
+    }
+
+    #[test]
+    fn used_of_shares_a_unit() {
+        const GB: u64 = 1 << 30;
+        assert_eq!(used_of(352 * GB, 476 * GB), "352 of 476 GB used");
+        assert_eq!(used_of(820 << 20, 3 * GB / 2), "820 MB of 1.5 GB used");
+    }
 }

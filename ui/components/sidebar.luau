@@ -33,6 +33,8 @@ local function row(props: {
 	here: () -> boolean,
 	icon: Node,
 	extra: Node?,
+	-- Shown in place of the plain label (a drive's name and free space).
+	title: Node?,
 	menu: (() -> { Node })?,
 	h: number?,
 }): Node
@@ -89,7 +91,7 @@ local function row(props: {
 			grow = 1,
 			min_w = 0,
 			gap = 4,
-			ui.text { props.label, literal = true, truncate = true },
+			props.title or ui.text { props.label, literal = true, truncate = true },
 			props.extra,
 		},
 	}
@@ -136,52 +138,81 @@ local function place_row(place: state.Place): Node
 	}
 end
 
--- A drive's mini meter: its category breakdown when a scan knows it, else
--- just how full it is.
-local function drive_data(place: state.Place): () -> meter.MeterData?
+-- Whether the folder on screen is on drive `place` (its root or below).
+local function on_drive(place: state.Place): () -> boolean
+	local letter = string.lower(string.sub(place.path, 1, 2))
 	return function()
-		local s = state.storage:get()
-		local letter = string.sub(place.path, 1, 2)
-		if s and s.drives then
-			for _, d in s.drives do
-				if string.lower(d.letter) == string.lower(letter) and d.categories then
-					return { bytes = d.categories, total = d.total }
-				end
-			end
-		end
-		return { bytes = { apps = (place.used or 0) }, total = 1 }
+		local n = state.nav:get()
+		return n ~= nil
+			and not n.this_pc
+			and not n.overview
+			and n.path ~= nil
+			and string.lower(string.sub(n.path, 1, 2)) == letter
 	end
 end
 
+-- A drive: its name with the free space right-aligned, a row of LEDs
+-- (its category breakdown once the Overview has scanned it), and
+-- "352 of 476 GB used". The drive the folder on screen is on gets a
+-- brighter name and amber free space.
 local function drive_row(place: state.Place): Node
 	local here = is_here(place.path)
+	local current = on_drive(place)
 	return row {
 		label = place.label,
 		path = place.path,
 		here = here,
-		h = 50,
+		h = 58,
 		icon = common.file_icon(function()
 			return place.icon
 		end, function()
 			return true
 		end, 18),
+		title = ui.row {
+			w_full = true,
+			gap = 8,
+			items = "center",
+			ui.text {
+				place.label,
+				literal = true,
+				truncate = true,
+				grow = 1,
+				min_w = 0,
+				weight = function()
+					return if current() then 600 else 400
+				end,
+			},
+			-- "123 GB" (the line below says "used"): the name keeps its letter.
+			ui.text {
+				(string.gsub(place.free_text or "", " free$", "")),
+				literal = true,
+				font = "$font.mono",
+				text_size = 10.5,
+				shrink = 0,
+				color = function()
+					return if current() then "$accent" else "$text.tertiary"
+				end,
+			},
+		},
 		extra = ui.column {
-			gap = 3,
+			gap = 4,
 			w_full = true,
 			meter.meter {
-				data = drive_data(place),
+				data = function()
+					return meter.drive_data(state.storage:get(), string.sub(place.path, 1, 2), place.used or 0)
+				end,
 				glow = function()
-					return (state.setting("glow") or 70) / 100 * 0.6
+					return (state.setting("glow") or 70) / 100 * (if current() then 0.8 else 0.5)
 				end,
 				motion = theme.motion(state.setting),
-				dot = 3,
-				gap = 1.5,
+				dot = 4.5,
+				gap = 2,
 				w_full = true,
-				h = 8,
+				h = 6,
 				label = `{place.label}: {math.floor((place.used or 0) * 100)}% used`,
 			},
 			ui.text {
-				place.detail or "",
+				place.used_of or place.detail or "",
 				literal = true,
 				font = "$font.mono",
 				text_size = 10.5,
@@ -213,7 +244,10 @@ end
 local function places_field(name: string): () -> { state.Place }
 	return function()
 		local p = state.places:get()
-		return if p then (p :: any)[name] else {}
+		if p == nil or (name == "drives" and p.show_drives == false) then
+			return {}
+		end
+		return (p :: any)[name]
 	end
 end
 

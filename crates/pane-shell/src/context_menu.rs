@@ -8,7 +8,8 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_SHIFT};
+use windows::Win32::Graphics::Gdi::ScreenToClient;
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, GetKeyState, VK_RBUTTON, VK_SHIFT};
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::{
     CMF_CANRENAME, CMF_EXPLORE, CMF_EXTENDEDVERBS, CMF_NORMAL, CMIC_MASK_PTINVOKE,
@@ -16,8 +17,9 @@ use windows::Win32::UI::Shell::{
     IContextMenu3, ILFindLastID, ILFree, IShellFolder, SHBindToParent, SHParseDisplayName,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreatePopupMenu, DestroyMenu, GetCursorPos, SW_SHOWNORMAL, TPM_RETURNCMD, TPM_RIGHTBUTTON,
-    TrackPopupMenuEx, WM_DRAWITEM, WM_INITMENUPOPUP, WM_MEASUREITEM, WM_MENUCHAR,
+    CreatePopupMenu, DestroyMenu, GetCursorPos, MSG, PM_REMOVE, PeekMessageW, PostMessageW, SW_SHOWNORMAL,
+    TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenuEx, WM_DRAWITEM, WM_INITMENUPOPUP, WM_MEASUREITEM, WM_MENUCHAR,
+    WM_MOUSEFIRST, WM_MOUSEHWHEEL, WM_MOUSELAST, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONUP,
 };
 use windows::core::{Interface, PCSTR, PCWSTR};
 
@@ -117,6 +119,7 @@ fn track(
         if subclassed {
             let _ = RemoveWindowSubclass(hwnd, Some(subclass_proc), SUBCLASS_ID);
         }
+        resync_pointer(hwnd, pt);
         ACTIVE.with(|a| *a.borrow_mut() = None);
 
         let id = cmd.0 as u32;
@@ -149,6 +152,51 @@ fn track(
         };
         let _ = DestroyMenu(hmenu);
         Ok(outcome)
+    }
+}
+
+/// The menu ran its own message loop, so the window missed what the mouse
+/// did meanwhile: the right button's release (the menu opened as it went
+/// down) and every move. Left like that, the app takes the button as still
+/// held, and the next move drags the item right-clicked. So, in order: the
+/// release it missed, then the clicks that closed the menu (a right-click
+/// on another item opens that item's menu, as in Explorer), each after a
+/// move to where it happened, then a move to where the pointer is now.
+/// `pressed_at` is where the menu was opened, in screen coordinates.
+fn resync_pointer(hwnd: HWND, pressed_at: POINT) {
+    let client = |mut p: POINT| -> LPARAM {
+        // SAFETY: converts a point on the stack for this window.
+        let _ = unsafe { ScreenToClient(hwnd, &mut p) };
+        LPARAM(((p.y as u16 as isize) << 16) | (p.x as u16 as isize))
+    };
+    // The mouse messages waiting for the window, taken out to re-send.
+    let mut waiting = Vec::new();
+    let mut msg = MSG::default();
+    // SAFETY: reads this thread's own queue for its window.
+    while unsafe { PeekMessageW(&mut msg, Some(hwnd), WM_MOUSEFIRST, WM_MOUSELAST, PM_REMOVE) }.as_bool() {
+        waiting.push((msg.message, msg.wParam, msg.lParam));
+    }
+    let post = |message: u32, wparam: WPARAM, lparam: LPARAM| {
+        // SAFETY: posting to our own window.
+        let _ = unsafe { PostMessageW(Some(hwnd), message, wparam, lparam) };
+    };
+    // SAFETY: plain query of the button's state.
+    let held = unsafe { GetAsyncKeyState(i32::from(VK_RBUTTON.0)) } < 0;
+    if !held && !waiting.iter().any(|&(m, ..)| m == WM_RBUTTONUP) {
+        post(WM_RBUTTONUP, WPARAM(0), client(pressed_at));
+    }
+    for (message, wparam, lparam) in waiting {
+        // A wheel's point is on the screen, a move is itself a position;
+        // a button's says where it happened: be there first.
+        if message != WM_MOUSEMOVE && message != WM_MOUSEWHEEL && message != WM_MOUSEHWHEEL {
+            post(WM_MOUSEMOVE, WPARAM(0), lparam);
+        }
+        post(message, wparam, lparam);
+    }
+    let mut now = POINT::default();
+    // SAFETY: writes the cursor position to the stack.
+    if unsafe { GetCursorPos(&mut now) }.is_ok() {
+        post(WM_MOUSEMOVE, WPARAM(0), client(now));
     }
 }
 

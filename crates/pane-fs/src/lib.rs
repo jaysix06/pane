@@ -1,11 +1,14 @@
 //! File system core: listing folders, sorting, and formatting entries.
 //! Pure logic lives here so it can be tested without a window.
 
+pub mod date;
 mod list;
+mod size;
 mod sort;
 mod watch;
 
 pub use list::list_dir;
+pub use size::{FolderSize, background_priority, folder_size, item_count};
 pub use sort::{SortKey, SortOptions, natural_cmp, sort_entries};
 #[cfg(windows)]
 pub use watch::{Watcher, watch};
@@ -85,34 +88,6 @@ mod tests {
 }
 
 /// A FILETIME as local "11/22/2026 3:04 PM" (empty for 0).
-#[cfg(windows)]
 pub fn format_modified(filetime: u64) -> String {
-    use windows::Win32::Foundation::{FILETIME, SYSTEMTIME};
-    use windows::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToTzSpecificLocalTime};
-    if filetime == 0 {
-        return String::new();
-    }
-    let ft = FILETIME { dwLowDateTime: filetime as u32, dwHighDateTime: (filetime >> 32) as u32 };
-    let mut utc = SYSTEMTIME::default();
-    let mut local = SYSTEMTIME::default();
-    // SAFETY: plain conversions between stack values.
-    unsafe {
-        if FileTimeToSystemTime(&ft, &mut utc).is_err()
-            || SystemTimeToTzSpecificLocalTime(None, &utc, &mut local).is_err()
-        {
-            return String::new();
-        }
-    }
-    let (hour, ampm) = match local.wHour {
-        0 => (12, "AM"),
-        h @ 1..=11 => (h, "AM"),
-        12 => (12, "PM"),
-        h => (h - 12, "PM"),
-    };
-    format!("{}/{}/{} {}:{:02} {}", local.wMonth, local.wDay, local.wYear, hour, local.wMinute, ampm)
-}
-
-#[cfg(not(windows))]
-pub fn format_modified(_filetime: u64) -> String {
-    String::new()
+    date::local_time(filetime).map(|t| date::absolute(&t)).unwrap_or_default()
 }

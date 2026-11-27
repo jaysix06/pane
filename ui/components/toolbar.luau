@@ -163,6 +163,9 @@ local function address_input(): Node
 		font = "$font.mono",
 		text_size = 12.5,
 		caret_color = "$accent",
+		-- The path pill around it draws the border and the focus.
+		border = 0,
+		focus = { border = 0 },
 		on_mount = function(el)
 			el:focus()
 		end,
@@ -230,6 +233,9 @@ local function search_box(): Node
 			bg = "#00000000",
 			text_size = 13,
 			caret_color = "$accent",
+			-- The box around it draws the border, amber while focused.
+			border = 0,
+			focus = { border = 0 },
 			on_focus = function()
 				focused:set(true)
 			end,

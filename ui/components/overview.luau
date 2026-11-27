@@ -66,7 +66,7 @@ local function category_meta(id: string)
 	return theme.categories[theme.category_index[id] or 11]
 end
 
--- Hairline grid with a warm vignette, behind everything.
+-- Hairline grid with a glow in the accent colour, behind everything.
 local backdrop = ui.shader([[
 fn fill(input: FillInput) -> vec4<f32> {
 	let pitch = 28.0;
@@ -75,8 +75,10 @@ fn fill(input: FillInput) -> vec4<f32> {
 	let uv = input.p / max(input.size, vec2<f32>(1.0));
 	let centre = length((uv - vec2<f32>(0.5, 0.18)) * vec2<f32>(1.0, 1.6));
 	let warm = exp(-centre * centre * 3.0);
-	let tint = input.params[0];
-	return vec4<f32>(tint.rgb, line * tint.a * 0.6 + warm * tint.a * 1.4);
+	// params[0]: the accent; params[1].x: how strong.
+	let tint = input.params[0].rgb;
+	let a = input.params[1].x;
+	return vec4<f32>(tint, line * a * 0.6 + warm * a * 1.4);
 }]])
 
 -- Drive chips ---------------------------------------------------------------
@@ -743,8 +745,8 @@ return function(): Node
 		min_h = 0,
 		scrollbar = true,
 		bg_shader = backdrop,
-		-- Grid tint: warm amber, faint.
-		shader_params = { { 1.0, 0.69, 0.13, 0.05 } },
+		-- Grid and glow in the accent from Settings (the token follows it), faint.
+		shader_params = { "$accent", { 0.05, 0, 0, 0 } },
 		ui.column {
 			w_full = true,
 			max_w = 1080,

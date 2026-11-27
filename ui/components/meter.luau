@@ -162,6 +162,20 @@ function M.boundaries(data: MeterData?, min_share: number?): { number }
 	return out
 end
 
+-- What a drive's meter shows: its category breakdown when an Overview scan
+-- knows it (`storage`: state.storage's value), else just how full it is.
+-- `letter` is "C:", `used` the used fraction.
+function M.drive_data(storage: any, letter: string, used: number): MeterData
+	if storage and storage.drives then
+		for _, d in storage.drives do
+			if string.lower(d.letter) == string.lower(letter) and d.categories then
+				return { bytes = d.categories, total = d.total }
+			end
+		end
+	end
+	return { bytes = { apps = used }, total = 1 }
+end
+
 -- A meter node.
 --   data       () -> MeterData?   what to show
 --   scanning   () -> boolean

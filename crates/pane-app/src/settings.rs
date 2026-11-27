@@ -55,6 +55,10 @@ pub struct Settings {
     pub confirm_delete: bool,
     pub delete_permanently: bool,
     pub natural_sort: bool,
+    /// Dates as "Today 9:26 AM" (off: "11/26/2026 9:26 AM").
+    pub relative_dates: bool,
+    /// Work out folder sizes in the background (not on network drives).
+    pub folder_sizes: bool,
 
     // Sidebar
     pub sidebar_quick_access: bool,
@@ -113,6 +117,8 @@ impl Default for Settings {
             confirm_delete: true,
             delete_permanently: false,
             natural_sort: true,
+            relative_dates: true,
+            folder_sizes: true,
             sidebar_quick_access: true,
             sidebar_known_folders: true,
             sidebar_drives: true,

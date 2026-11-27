@@ -37,7 +37,12 @@ local DETAILS_ROW = 30
 local LIST_ROW = 26
 local COL_DATE = 170
 local COL_TYPE = 190
-local COL_SIZE = 110
+local COL_SIZE = 140
+-- A group header ("FOLDERS 8 ── 5.0 GB") above the first folder and the
+-- first file, in details view.
+local GROUP_H = 30
+-- Grouping lays out every row's height; past this many it's skipped.
+local GROUP_MAX = 20000
 -- Name keeps at least this much: narrower, Type goes, then Date modified
 -- (the preview pane open in a small window). Size always stays.
 local NAME_MIN = 220
@@ -81,6 +86,11 @@ end
 local function base_name(path: string): string
 	return string.match(path, "([^/\\]+)[/\\]*$") or path
 end
+
+-- A right-click on an item opens Explorer's menu natively, so zgx sees no
+-- menu there and passes the click on to the folder view, which would open
+-- the folder's own menu as well. The item claims the click; the view skips it.
+local item_menu_claimed = false
 
 -- What a press on an item does, shared by every layout.
 local function item_handlers(index: () -> number, row: () -> state.Row)
@@ -158,6 +168,7 @@ local function item_handlers(index: () -> number, row: () -> state.Row)
 			end
 		end,
 		context_menu = function()
+			item_menu_claimed = true
 			ui.invoke("context_menu", index())
 			-- Explorer's own menu was shown natively: no zgx menu.
 			return nil
@@ -325,9 +336,111 @@ local function details_header(): Node
 		-- Search results show where each one is instead.
 		header_cell(function()
 			local n = state.nav:get()
-			return if n and n.search then "Folder" else "Type"
+			return if n and n.search then "Folder" else "Kind"
 		end, "type", COL_TYPE),
 		header_cell("Size", "size", COL_SIZE, "end"),
+	}
+end
+
+-- Ten LEDs: a folder's part of everything in the folder on screen.
+local function share_leds(share: () -> number): Node
+	local cells = {}
+	for k = 1, 10 do
+		table.insert(
+			cells,
+			ui.div {
+				w = 5,
+				h = 9,
+				rounded = 1.5,
+				bg = function()
+					local v = share()
+					-- To the nearest tenth: a folder under 5% lights none.
+					local lit = math.floor(v * 10 + 0.5)
+					return if k <= lit then "$accent" else "$app.led_off"
+				end,
+			}
+		)
+	end
+	return ui.row {
+		gap = 2,
+		shrink = 0,
+		hidden = function()
+			return share() < 0
+		end,
+		table.unpack(cells),
+	}
+end
+
+-- Which group row `i` starts: "folders", "files", or nil.
+local function group_at(i: number): string?
+	local g = state.groups:get()
+	if g == nil or state.view() ~= "details" or state.rows:len() > GROUP_MAX then
+		return nil
+	end
+	if i == 1 and g.folders > 0 then
+		return "folders"
+	end
+	if i == g.folders + 1 and g.files > 0 then
+		return "files"
+	end
+	return nil
+end
+
+-- Each row's height: taller where a group starts.
+local function row_heights(): { number }
+	local n = state.rows:len()
+	local out = table.create(n, DETAILS_ROW)
+	local g = state.groups:get()
+	if g ~= nil and n <= GROUP_MAX then
+		if g.folders > 0 and n >= 1 then
+			out[1] += GROUP_H
+		end
+		if g.files > 0 and g.folders + 1 <= n then
+			out[g.folders + 1] += GROUP_H
+		end
+	end
+	return out
+end
+
+-- "FOLDERS 8 ──── 5.0 GB" or "FILES 6 ──── 147 KB".
+local function group_header(which: () -> string?): Node
+	local function part(k: number): () -> string
+		return function()
+			local g = state.groups:get()
+			if g == nil then
+				return ""
+			end
+			if which() == "folders" then
+				if k == 1 then
+					return "FOLDERS"
+				elseif k == 2 then
+					return tostring(g.folders)
+				end
+				local s = state.sizes:get()
+				local n = state.nav:get()
+				if s == nil or n == nil or s.folder ~= n.path then
+					return ""
+				end
+				return if s.done then s.folders_total else "Measuring…"
+			end
+			if k == 1 then
+				return "FILES"
+			elseif k == 2 then
+				return tostring(g.files)
+			end
+			return g.files_size
+		end
+	end
+	return ui.row {
+		h = GROUP_H,
+		w_full = true,
+		px = 12,
+		gap = 10,
+		items = "center",
+		ui.text { part(1), font = "$font.mono", text_size = 10.5, letter_spacing = 1.2, color = "$text.tertiary" },
+		ui.text { part(2), font = "$font.mono", text_size = 10.5, color = "$text.disabled" },
+		ui.div { grow = 1, h = 1, bg = "$border.subtle" },
+		ui.text { part(3), font = "$font.mono", text_size = 11, color = "$text.tertiary" },
 	}
 end
 
@@ -340,7 +453,15 @@ local function details_row(_item: state.Row, index: State<number>, row: State<st
 			return (row:get() :: any)[name]
 		end
 	end
-	return ui.row(with({
+	-- A subfolder's count and size, once sizes.rs has them.
+	local function info(): any
+		local item = r()
+		return if item.dir then state.folder_info(item.id) else nil
+	end
+	local function group(): string?
+		return group_at(index:get())
+	end
+	local line = ui.row(with({
 		role = "option",
 		label = field("name"),
 		selected = function()
@@ -355,9 +476,6 @@ local function details_row(_item: state.Row, index: State<number>, row: State<st
 		rounded = "$radius.sm",
 		bg = selected_bg(r),
 		hover = { bg = "$hover" },
-		on_mount = entrance(function()
-			return index:peek()
-		end),
 		common.pip(function()
 			return state.is_selected(r().id)
 		end),
@@ -375,34 +493,119 @@ local function details_row(_item: state.Row, index: State<number>, row: State<st
 			name_cell(r, function()
 				return index:peek()
 			end),
+			-- The extension as a tag, when names hide it.
+			ui.show(
+				function()
+					return (r().ext or "") ~= "" and state.renaming:get() ~= r().id
+				end,
+				ui.text {
+					field("ext"),
+					literal = true,
+					shrink = 0,
+					px = 5,
+					rounded = 4,
+					bg = "$surface.raised",
+					border = 1,
+					border_color = "$border.subtle",
+					font = "$font.mono",
+					text_size = 10,
+					color = "$text.secondary",
+				}
+			),
 		},
-		ui.text {
-			field("date"),
-			literal = true,
+		ui.row {
 			w = COL_DATE,
 			shrink = 0,
+			gap = 7,
+			items = "center",
 			hidden = column_hidden("date"),
-			color = "$text.secondary",
-			font = "$font.mono",
-			text_size = 12,
+			tooltip = ui.text { field("date_full") },
+			-- Changed in the last hour.
+			ui.show(
+				function()
+					return r().recent == true
+				end,
+				ui.div {
+					w = 5,
+					h = 5,
+					shrink = 0,
+					rounded = "$radius.full",
+					bg = "$accent",
+					shadow = { x = 0, y = 0, blur = 6, spread = 0, color = "$app.glow" },
+				}
+			),
+			ui.text {
+				field("date"),
+				literal = true,
+				min_w = 0,
+				color = function()
+					return if r().recent then "$text.primary" else "$text.secondary"
+				end,
+				font = "$font.mono",
+				text_size = 12,
+				truncate = true,
+			},
+		},
+		ui.text {
+			function()
+				local i = info()
+				if i and i.count ~= "" then
+					return i.count
+				end
+				return r().kind
+			end,
+			literal = true,
+			w = COL_TYPE,
+			shrink = 0,
+			hidden = column_hidden("type"),
+			color = function()
+				return if r().dir then "$text.tertiary" else "$text.secondary"
+			end,
 			truncate = true,
 		},
-		ui.text { field("kind"), literal = true, w = COL_TYPE, shrink = 0, hidden = column_hidden("type"), color = "$text.secondary", truncate = true },
-		ui.text {
-			field("size"),
-			literal = true,
+		ui.row {
 			w = COL_SIZE,
 			shrink = 0,
-			align = "end",
-			color = "$text.secondary",
-			font = "$font.mono",
-			text_size = 12,
+			gap = 8,
+			items = "center",
+			justify = "end",
+			share_leds(function()
+				local i = info()
+				return if i then i.share else -1
+			end),
+			ui.text {
+				function()
+					local i = info()
+					if i then
+						return i.size
+					end
+					return r().size
+				end,
+				literal = true,
+				-- A fixed width keeps the LEDs in one column.
+				w = 56,
+				shrink = 0,
+				align = "end",
+				color = "$text.secondary",
+				font = "$font.mono",
+				text_size = 12,
+			},
 		},
 	}, item_handlers(function()
 		return index:peek()
 	end, function()
 		return row:peek()
 	end)))
+	return ui.column {
+		w_full = true,
+		on_mount = entrance(function()
+			return index:peek()
+		end),
+		ui.show(function()
+			return group() ~= nil
+		end, group_header(group)),
+		line,
+	}
 end
 
 -- List ---------------------------------------------------------------------
@@ -451,7 +654,9 @@ local function list_row(_item: state.Row, index: State<number>, row: State<state
 		},
 		ui.text {
 			function()
-				return r().size
+				local item = r()
+				local i = if item.dir then state.folder_info(item.id) else nil
+				return if i then i.size else item.size
 			end,
 			literal = true,
 			color = "$text.tertiary",
@@ -670,6 +875,8 @@ local function list_of(kind: string): Node
 		key = keyed,
 		row = if kind == "list" then list_row else details_row,
 		height = if kind == "list" then LIST_ROW else DETAILS_ROW,
+		-- Details: taller rows where the folders and the files start.
+		heights = if kind == "list" then nil else row_heights,
 		scrollbar = true,
 		w_full = true,
 		grow = 1,
@@ -738,6 +945,11 @@ return function(): Node
 		on_key = on_list_key,
 		-- Right-click on empty space: the folder's own menu (New, Paste, ...).
 		context_menu = function()
+			if item_menu_claimed then
+				-- The same right-click, passed on from an item.
+				item_menu_claimed = false
+				return nil
+			end
 			ui.invoke("background_menu")
 			return nil
 		end,

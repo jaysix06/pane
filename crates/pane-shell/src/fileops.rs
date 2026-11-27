@@ -65,9 +65,47 @@ pub struct OpOutcome {
 
 type Report = Arc<dyn Fn(OpProgress) + Send + Sync>;
 
+/// Pauses or cancels a running operation from another thread. Windows asks
+/// Pane before each item and as each one progresses: a paused operation
+/// waits there, a cancelled one stops there (the item being copied when it
+/// was cancelled is finished or rolled back by Windows, as in Explorer).
+#[derive(Default)]
+pub struct Control {
+    cancelled: std::sync::atomic::AtomicBool,
+    paused: std::sync::Mutex<bool>,
+    wake: std::sync::Condvar,
+}
+
+impl Control {
+    pub fn cancel(&self) {
+        self.cancelled.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.wake.notify_all();
+    }
+
+    pub fn set_paused(&self, paused: bool) {
+        *self.paused.lock().unwrap() = paused;
+        self.wake.notify_all();
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Waits while paused; an error once cancelled (it stops Windows' engine).
+    fn checkpoint(&self) -> Result<()> {
+        let mut paused = self.paused.lock().unwrap();
+        while *paused && !self.is_cancelled() {
+            paused = self.wake.wait(paused).unwrap();
+        }
+        drop(paused);
+        if self.is_cancelled() { Err(windows::Win32::Foundation::E_ABORT.into()) } else { Ok(()) }
+    }
+}
+
 #[implement(IFileOperationProgressSink)]
 struct Sink {
     report: Report,
+    control: Arc<Control>,
     created: Arc<std::sync::Mutex<Vec<PathBuf>>>,
     failed: Arc<std::sync::Mutex<Vec<(PathBuf, String)>>>,
 }
@@ -85,13 +123,22 @@ fn item_path(item: Ref<IShellItem>) -> Option<PathBuf> {
     }
 }
 
+/// The codes Windows gives an item someone cancelled (Pane's cancel, or
+/// Cancel in Windows' own conflict dialog): not failures.
+fn is_cancel(hr: HRESULT) -> bool {
+    hr == windows::Win32::Foundation::E_ABORT
+        || hr == HRESULT(0x8027_0000u32 as i32) // COPYENGINE_E_USER_CANCELLED
+        || hr == HRESULT(0x8007_04C7u32 as i32) // HRESULT_FROM_WIN32(ERROR_CANCELLED)
+}
+
 impl Sink_Impl {
     fn post(&self, source: Ref<IShellItem>, result: HRESULT, created: Ref<IShellItem>) {
         if result.is_ok() {
             if let Some(p) = item_path(created) {
                 self.created.lock().unwrap().push(p);
             }
-        } else if result != windows::Win32::Foundation::E_ABORT {
+        // After a cancel, the item in hand reports a failure: it isn't one.
+        } else if !is_cancel(result) && !self.control.is_cancelled() {
             let path = item_path(source).unwrap_or_default();
             self.failed.lock().unwrap().push((path, windows::core::Error::from(result).message()));
         }
@@ -107,14 +154,14 @@ impl IFileOperationProgressSink_Impl for Sink_Impl {
         Ok(())
     }
     fn PreRenameItem(&self, _: u32, _: Ref<IShellItem>, _: &PCWSTR) -> Result<()> {
-        Ok(())
+        self.control.checkpoint()
     }
     fn PostRenameItem(&self, _: u32, item: Ref<IShellItem>, _: &PCWSTR, hr: HRESULT, new: Ref<IShellItem>) -> Result<()> {
         self.post(item, hr, new);
         Ok(())
     }
     fn PreMoveItem(&self, _: u32, _: Ref<IShellItem>, _: Ref<IShellItem>, _: &PCWSTR) -> Result<()> {
-        Ok(())
+        self.control.checkpoint()
     }
     fn PostMoveItem(
         &self,
@@ -129,7 +176,7 @@ impl IFileOperationProgressSink_Impl for Sink_Impl {
         Ok(())
     }
     fn PreCopyItem(&self, _: u32, _: Ref<IShellItem>, _: Ref<IShellItem>, _: &PCWSTR) -> Result<()> {
-        Ok(())
+        self.control.checkpoint()
     }
     fn PostCopyItem(
         &self,
@@ -144,14 +191,14 @@ impl IFileOperationProgressSink_Impl for Sink_Impl {
         Ok(())
     }
     fn PreDeleteItem(&self, _: u32, _: Ref<IShellItem>) -> Result<()> {
-        Ok(())
+        self.control.checkpoint()
     }
     fn PostDeleteItem(&self, _: u32, item: Ref<IShellItem>, hr: HRESULT, _: Ref<IShellItem>) -> Result<()> {
         self.post(item, hr, Ref::default());
         Ok(())
     }
     fn PreNewItem(&self, _: u32, _: Ref<IShellItem>, _: &PCWSTR) -> Result<()> {
-        Ok(())
+        self.control.checkpoint()
     }
     fn PostNewItem(
         &self,
@@ -168,7 +215,7 @@ impl IFileOperationProgressSink_Impl for Sink_Impl {
     }
     fn UpdateProgress(&self, total: u32, done: u32) -> Result<()> {
         (self.report)(OpProgress { done, total: total.max(1) });
-        Ok(())
+        self.control.checkpoint()
     }
     fn ResetTimer(&self) -> Result<()> {
         Ok(())
@@ -189,6 +236,16 @@ fn shell_item(path: &Path) -> Result<IShellItem> {
 /// Runs `op`, owned by window `hwnd` (Windows' dialogs sit over it),
 /// calling `report` as it progresses. Blocks until done.
 pub fn run(hwnd: isize, op: &Op, report: impl Fn(OpProgress) + Send + Sync + 'static) -> Result<OpOutcome> {
+    run_with(hwnd, op, Arc::new(Control::default()), report)
+}
+
+/// `run`, paused and cancelled through `control`.
+pub fn run_with(
+    hwnd: isize,
+    op: &Op,
+    control: Arc<Control>,
+    report: impl Fn(OpProgress) + Send + Sync + 'static,
+) -> Result<OpOutcome> {
     init_com();
     // SAFETY: COM calls on this thread's apartment.
     unsafe {
@@ -208,7 +265,8 @@ pub fn run(hwnd: isize, op: &Op, report: impl Fn(OpProgress) + Send + Sync + 'st
         let created = Arc::new(std::sync::Mutex::new(Vec::new()));
         let failed = Arc::new(std::sync::Mutex::new(Vec::new()));
         let sink: IFileOperationProgressSink =
-            Sink { report: Arc::new(report), created: created.clone(), failed: failed.clone() }.into();
+            Sink { report: Arc::new(report), control: control.clone(), created: created.clone(), failed: failed.clone() }
+                .into();
         let cookie = fo.Advise(&sink)?;
 
         match op {
@@ -238,12 +296,13 @@ pub fn run(hwnd: isize, op: &Op, report: impl Fn(OpProgress) + Send + Sync + 'st
             }
         }
         let performed = fo.PerformOperations();
-        let aborted = fo.GetAnyOperationsAborted().map(|b| b.as_bool()).unwrap_or(false);
+        let aborted =
+            fo.GetAnyOperationsAborted().map(|b| b.as_bool()).unwrap_or(false) || control.is_cancelled();
         let _ = fo.Unadvise(cookie);
         // A cancelled conflict dialog reports as aborted, not as an error.
         if let Err(e) = performed
-            && e.code() != windows::Win32::Foundation::E_ABORT
-            && e.code() != HRESULT(0x8027_0000u32 as i32)
+            && !control.is_cancelled()
+            && !is_cancel(e.code())
             && !aborted
         {
             return Err(e);
@@ -345,6 +404,63 @@ mod tests {
         run(0, &Op::Purge { paths: vec![sub.clone()] }, report).unwrap();
         assert!(!sub.exists());
         assert!(*progress.lock().unwrap() >= 1, "progress was reported");
+        std::fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn cancel_stops_a_folder_copy() {
+        let d = temp("cancel");
+        let from = d.join("many");
+        std::fs::create_dir(&from).unwrap();
+        for i in 0..1500 {
+            std::fs::write(from.join(format!("f{i}.dat")), [0u8; 4096]).unwrap();
+        }
+        let to = d.join("to");
+        std::fs::create_dir(&to).unwrap();
+        let control = Arc::new(Control::default());
+        let c2 = control.clone();
+        // Cancel as soon as the copy reports progress past the start.
+        let out = run_with(0, &Op::Copy { from: vec![from], to: to.clone() }, control, move |p| {
+            if p.done > 0 {
+                c2.cancel();
+            }
+        })
+        .unwrap();
+        let copied = std::fs::read_dir(to.join("many")).map_or(0, |r| r.count());
+        assert!(out.aborted);
+        assert!(copied < 1500, "copied {copied} of 1500");
+        std::fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn cancel_while_paused_stops_a_folder_copy() {
+        let d = temp("pause-cancel");
+        let from = d.join("many");
+        std::fs::create_dir(&from).unwrap();
+        for i in 0..1500 {
+            std::fs::write(from.join(format!("f{i}.dat")), [0u8; 4096]).unwrap();
+        }
+        let to = d.join("to");
+        std::fs::create_dir(&to).unwrap();
+        let control = Arc::new(Control::default());
+        let (c2, c3) = (control.clone(), control.clone());
+        let once = std::sync::Once::new();
+        let out = run_with(0, &Op::Copy { from: vec![from], to: to.clone() }, control, move |p| {
+            if p.done > 0 {
+                once.call_once(|| {
+                    c2.set_paused(true);
+                    let c3 = c3.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(300));
+                        c3.cancel();
+                    });
+                });
+            }
+        })
+        .unwrap();
+        let copied = std::fs::read_dir(to.join("many")).map_or(0, |r| r.count());
+        assert!(out.aborted);
+        assert!(copied < 1500, "copied {copied} of 1500");
         std::fs::remove_dir_all(d).unwrap();
     }
 }
