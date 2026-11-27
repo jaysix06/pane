@@ -103,6 +103,7 @@ local function row(props: {
 			end
 		end,
 		context_menu = props.menu,
+		context_menu_style = common.menu_style,
 		common.pip(props.here),
 		props.icon,
 		ui.column {
@@ -127,31 +128,19 @@ local function place_row(place: state.Place): Node
 			return true
 		end, 18),
 		menu = function()
-			local items = {
-				ui.menu_item {
-					"Open in new tab",
-					on_click = function()
-						ui.invoke("navigate_new_tab", place.path)
-					end,
-				},
-			}
-			table.insert(
-				items,
+			return {
+				common.menu_entry("Open in new tab", function()
+					ui.invoke("navigate_new_tab", place.path)
+				end, { icon = "plus" }),
+				common.menu_line(),
 				if place.pinned
-					then ui.menu_item {
-						"Unpin from Quick access",
-						on_click = function()
-							ui.invoke("unpin", place.path)
-						end,
-					}
-					else ui.menu_item {
-						"Pin to Quick access",
-						on_click = function()
-							ui.invoke("pin", place.path)
-						end,
-					}
-			)
-			return items
+					then common.menu_entry("Unpin from Quick access", function()
+						ui.invoke("unpin", place.path)
+					end, { icon = "pin" })
+					else common.menu_entry("Pin to Quick access", function()
+						ui.invoke("pin", place.path)
+					end, { icon = "pin" }),
+			}
 		end,
 	}
 end
@@ -280,29 +269,21 @@ local function recycle_row(): Node
 				end,
 				menu = function()
 					local items = {
-						ui.menu_item {
-							"Open in new tab",
-							on_click = function()
-								ui.invoke("navigate_new_tab", "::recycle")
-							end,
-						},
-						ui.menu_item {
-							"Open in File Explorer",
-							on_click = function()
-								ui.invoke("open_recycle_bin")
-							end,
-						},
+						common.menu_entry("Open in new tab", function()
+							ui.invoke("navigate_new_tab", "::recycle")
+						end, { icon = "plus" }),
+						common.menu_entry("Open in File Explorer", function()
+							ui.invoke("open_recycle_bin")
+						end, { icon = "external" }),
 					}
 					local r = recycle_info()
 					if r and r.count > 0 then
+						table.insert(items, common.menu_line())
 						table.insert(
 							items,
-							ui.menu_item {
-								"Empty Recycle Bin",
-								on_click = function()
-									ui.invoke("empty_recycle_bin")
-								end,
-							}
+							common.menu_entry("Empty Recycle Bin", function()
+								ui.invoke("empty_recycle_bin")
+							end, { icon = "trash", danger = true })
 						)
 					end
 					return items

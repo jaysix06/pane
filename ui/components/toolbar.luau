@@ -38,7 +38,7 @@ local function hidden_crumbs_menu(hidden: any): Node
 		function()
 			return #hidden:get() > 0
 		end,
-		ui.menu {
+		ui.menu(common.menu_props {
 			open = open,
 			label = "Earlier folders",
 			anchor = ui.button {
@@ -53,14 +53,11 @@ local function hidden_crumbs_menu(hidden: any): Node
 				ui.text { "…", font = "$font.mono" },
 			},
 			ui.each(hidden, function(crumb: state.Crumb)
-				return ui.menu_item {
-					label = crumb.label,
-					on_click = function()
-						ui.invoke("navigate", crumb.path)
-					end,
-				}
+				return common.menu_entry(crumb.label, function()
+					ui.invoke("navigate", crumb.path)
+				end, { icon = "folder" })
 			end),
-		}
+		})
 	)
 end
 
@@ -499,25 +496,12 @@ end
 local function new_menu(): Node
 	local open = ui.state("new_menu_open", false)
 	local function item(label: string, icon: string, run: () -> (), key: (() -> string)?): Node
-		return ui.menu_item {
-			label = label,
-			on_click = function()
-				open:set(false)
-				run()
-			end,
-			ui.row {
-				gap = 8,
-				items = "center",
-				w_full = true,
-				ui.div { color = "$text.secondary", icons.icon(icon, 15) },
-				ui.text { label, grow = 1 },
-				if key
-					then ui.text { key, font = "$font.mono", text_size = 11, color = "$text.tertiary", pl = 16 }
-					else nil,
-			},
-		}
+		return common.menu_entry(label, function()
+			open:set(false)
+			run()
+		end, { icon = icon, key = key })
 	end
-	return ui.menu {
+	return ui.menu(common.menu_props {
 		open = open,
 		label = "New",
 		anchor = ui.button {
@@ -538,14 +522,16 @@ local function new_menu(): Node
 			ui.div { color = "$text.secondary", icons.icon("plus", 15) },
 			ui.text { "New", text_size = 13 },
 		},
-		item("Folder", "folder_plus", commands.new_folder, hint("new_folder")),
+		item("Folder", "folder_plus", commands.new_folder, function()
+			return shortcuts.key("new_folder")
+		end),
 		item("Text document", "doc", function()
 			commands.new_file("text")
 		end),
 		item("Markdown document", "doc", function()
 			commands.new_file("markdown")
 		end),
-	}
+	})
 end
 
 -- Commands for the folder itself, with nothing selected: pasting what's
@@ -676,7 +662,7 @@ local function sort_menu(): Node
 			end
 		end
 	end
-	return ui.menu {
+	return ui.menu(common.menu_props {
 		open = open,
 		label = "Sort",
 		-- Says what it sorts by, so the order on screen is never a guess.
@@ -713,7 +699,7 @@ local function sort_menu(): Node
 		common.separator(),
 		common.check_item("Ascending", direction(false), flip_to(false)),
 		common.check_item("Descending", direction(true), flip_to(true)),
-	}
+	})
 end
 
 local function more_menu(): Node
@@ -728,7 +714,7 @@ local function more_menu(): Node
 			return state.setting(name) == true
 		end
 	end
-	return ui.menu {
+	return ui.menu(common.menu_props {
 		open = open,
 		label = "More",
 		anchor = common.icon_button { label = "More", icon = "more", on_click = ui.toggle(open) },
@@ -756,11 +742,13 @@ local function more_menu(): Node
 			end, "bolt")
 		),
 		common.separator(),
-		common.menu_item("Settings (Ctrl+,)", function()
+		common.menu_entry("Settings", function()
 			shortcuts.open_settings()
-		end, "settings"),
+		end, { icon = "settings", key = function()
+			return shortcuts.key("settings")
+		end }),
 		common.menu_item("About Pane", about.show, "info"),
-	}
+	})
 end
 
 return function(): Node

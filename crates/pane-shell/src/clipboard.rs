@@ -121,6 +121,34 @@ pub fn set_files(hwnd: isize, paths: &[PathBuf], cut: bool) -> bool {
     ok
 }
 
+/// Puts `text` on the clipboard as plain text (a path to paste anywhere).
+pub fn set_text(hwnd: isize, text: &str) -> bool {
+    const CF_UNICODETEXT: u32 = 13;
+    if !open(hwnd) {
+        return false;
+    }
+    let bytes: Vec<u8> = text.encode_utf16().chain(std::iter::once(0)).flat_map(u16::to_le_bytes).collect();
+    // SAFETY: the clipboard is open; the block's ownership goes to it.
+    let ok = unsafe {
+        let _ = EmptyClipboard();
+        match global_with(&bytes) {
+            Some(g) => {
+                let ok = SetClipboardData(CF_UNICODETEXT, Some(HANDLE(g.0))).is_ok();
+                if !ok {
+                    let _ = GlobalFree(Some(g));
+                }
+                ok
+            }
+            None => false,
+        }
+    };
+    // SAFETY: opened above.
+    unsafe {
+        let _ = CloseClipboard();
+    }
+    ok
+}
+
 /// Files on the clipboard and whether they were cut (to be moved).
 pub fn get_files(hwnd: isize) -> Option<(Vec<PathBuf>, bool)> {
     // SAFETY: plain query.

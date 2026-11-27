@@ -109,6 +109,13 @@ function M.cut()
 	end
 end
 
+-- The selection's full paths as text, one per line.
+function M.copy_path()
+	if in_folder() and state.sel:peek().count > 0 then
+		ui.invoke("copy_path")
+	end
+end
+
 function M.paste()
 	if in_folder() then
 		ui.invoke("paste")

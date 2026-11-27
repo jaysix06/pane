@@ -47,6 +47,7 @@ M.list = {
 	{ id = "select_all", label = "Select all", keys = { "ctrl+a" }, run = function() ui.invoke("select_all") end },
 	{ id = "copy", label = "Copy", keys = { "ctrl+c" }, run = commands.copy },
 	{ id = "cut", label = "Cut", keys = { "ctrl+x" }, run = commands.cut },
+	{ id = "copy_path", label = "Copy path", keys = { "ctrl+shift+c" }, run = commands.copy_path },
 	{ id = "paste", label = "Paste", keys = { "ctrl+v" }, run = commands.paste },
 	{ id = "new_folder", label = "New folder", keys = { "ctrl+shift+n" }, run = commands.new_folder },
 	{ id = "rename", label = "Rename", keys = { "f2" }, run = commands.rename },
@@ -151,6 +152,18 @@ function M.hint(id: string): string
 		end
 	end
 	return id
+end
+
+-- Just the key that runs command `id`, as people read it ("Ctrl+C"), or
+-- "" when it has none: for menus, which show the label beside it.
+function M.key(id: string): string
+	for _, c in M.list do
+		if c.id == id then
+			local keys = M.keys(c)
+			return if #keys > 0 then M.label(keys[1]) else ""
+		end
+	end
+	return ""
 end
 
 -- The command `key` runs, if any.

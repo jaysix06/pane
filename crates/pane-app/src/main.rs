@@ -329,6 +329,24 @@ fn register_ops_actions(host: &ScriptHost, app: &AppRef, ops: &ops::OpsRef) {
     on("copy", |a, o, _| ops::copy(o, a, false));
     on("cut", |a, o, _| ops::copy(o, a, true));
     on("paste", |a, o, _| ops::paste(o, a));
+    // The menu's "Paste into folder": the folder at the index.
+    on("paste_into", |a, o, arg| {
+        let Some(i) = index_arg(arg) else { return };
+        if app::showing_zip(a) {
+            return;
+        }
+        let dest = {
+            let app = a.borrow();
+            let tab = app.tab();
+            match (&tab.history.current, tab.entries.get(i)) {
+                (Location::Folder(_) | Location::Search { .. }, Some(e)) if e.is_dir => tab.path_of(i),
+                _ => None,
+            }
+        };
+        if let Some(dest) = dest {
+            ops::paste_to(o, a, dest);
+        }
+    });
     // { permanent, confirmed }
     on("delete", |a, o, arg| ops::delete(o, a, flag(arg, "permanent"), flag(arg, "confirmed")));
     // { index, name }
@@ -399,20 +417,34 @@ fn register_ops_actions(host: &ScriptHost, app: &AppRef, ops: &ops::OpsRef) {
         };
         ops::recycle(o, a, paths);
     });
-    // The shell's menu for the row right-clicked (and the rest of the
-    // selection when it is part of it).
-    on("context_menu", |a, o, arg| {
-        let Some(i) = index_arg(arg) else { return };
-        // Inside a zip there is nothing on disk for the shell's menu; the
-        // Recycle Bin's items have their own (views.luau).
-        if app::showing_zip(a) || a.borrow().tab().history.current == Location::RecycleBin {
+    // Pane's own right-click menu (views.luau): the row right-clicked is
+    // selected first (kept with the rest when it is part of the selection),
+    // and the menu acts on the selection.
+    on("menu_select", |a, _, arg| {
+        if let Some(i) = index_arg(arg) {
             app::ensure_selected(a, i);
+        }
+    });
+    // The selection's full paths on the clipboard as text, one per line.
+    on("copy_path", |a, _, _| {
+        let paths = a.borrow().tab().selected_paths();
+        if paths.is_empty() {
             return;
         }
-        // The row right-clicked is selected first, and drawn so before the
-        // menu opens: right-clicking another item while a menu is open
-        // moves the highlight to it, so it's clear which item the menu is for.
-        app::ensure_selected(a, i);
+        let text = paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("\r\n");
+        let hwnd = pane_shell::active_window().0 as isize;
+        if !pane_shell::clipboard::set_text(hwnd, &text) {
+            a.borrow().toast("Couldn't use the clipboard; another app may be holding it.");
+        }
+    });
+    // "Show more options": Explorer's own menu for the selection, with the
+    // entries other apps add (Open with, 7-Zip, Properties, …).
+    on("shell_menu", |a, o, _| {
+        // Inside a zip there is nothing on disk for the shell's menu; the
+        // Recycle Bin's items have Pane's menu only.
+        if app::showing_zip(a) || a.borrow().tab().history.current == Location::RecycleBin {
+            return;
+        }
         after_a_frame(a, o, |a, o| {
             let (paths, folder) = {
                 let app = a.borrow();
@@ -431,8 +463,8 @@ fn register_ops_actions(host: &ScriptHost, app: &AppRef, ops: &ops::OpsRef) {
             }
         });
     });
-    // Right-click on empty space: the folder's own menu (New, Paste, …).
-    on("background_menu", |a, o, _| {
+    // "Show more options" on empty space: the folder's own shell menu.
+    on("shell_background_menu", |a, o, _| {
         if !matches!(a.borrow().tab().history.current, Location::Folder(_)) || app::showing_zip(a) {
             return;
         }

@@ -1718,6 +1718,8 @@ fn publish_nav(app: &AppRef) {
         ("this_pc", Value::from(matches!(location, Location::ThisPc))),
         ("overview", Value::from(matches!(location, Location::Overview))),
         ("recycle", Value::from(matches!(location, Location::RecycleBin))),
+        // Inside a zip file: read-only, nothing on disk for the shell.
+        ("zip", Value::from(matches!(location, Location::Folder(p) if pane_fs::zip::split(p).is_some()))),
         ("sort", Value::from(sort)),
         ("descending", Value::from(tab.descending)),
         ("view", Value::from(tab.view.as_str())),

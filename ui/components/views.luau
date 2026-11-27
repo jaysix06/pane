@@ -6,6 +6,7 @@ local state = require("../state")
 local theme = require("../theme")
 local common = require("./common")
 local commands = require("./commands")
+local shortcuts = require("../shortcuts")
 
 local motion = theme.motion(state.setting)
 
@@ -105,10 +106,191 @@ local function base_name(path: string): string
 	return string.match(path, "([^/\\]+)[/\\]*$") or path
 end
 
--- A right-click on an item opens Explorer's menu natively, so zgx sees no
--- menu there and passes the click on to the folder view, which would open
--- the folder's own menu as well. The item claims the click; the view skips it.
-local item_menu_claimed = false
+-- Right-click menus -----------------------------------------------------------
+-- Pane's own, in its look (common.menu_*). Explorer's menu, with what other
+-- apps add to it (Open with, 7-Zip, Properties…), is one entry away: Show
+-- more options.
+
+-- When an item last opened its menu: the same right-click may reach the
+-- folder view too, which then leaves it to the item.
+local item_menu_at = -1
+local sub_view = ui.state("menu_view_open", false)
+local sub_sort = ui.state("menu_sort_open", false)
+local sub_new = ui.state("menu_new_open", false)
+
+local function key(id: string): () -> string
+	return function()
+		return shortcuts.key(id)
+	end
+end
+
+local function clipboard_words(): string
+	local c = state.clipboard:peek()
+	local what = if c.count == 1 then "1 item" else `{c.count} items`
+	return if c.cut then `Move {what} here` else `Paste {what}`
+end
+
+-- The menu for the item at `i` (and the rest of the selection when it is
+-- part of it). Rust selects it as the menu opens.
+local function item_menu(i: number, r: state.Row): { Node }
+	local entry, line = common.menu_entry, common.menu_line
+	ui.invoke("menu_select", i)
+
+	if state.in_recycle() then
+		return {
+			entry("Restore", commands.restore, { icon = "back" }),
+			line(),
+			entry("Delete permanently", commands.purge, { icon = "trash", danger = true, key = key("delete") }),
+		}
+	end
+
+	local n = state.nav:peek()
+	local zip = n ~= nil and n.zip == true
+	local sel = state.sel:peek()
+	local count = if sel.ids ~= nil and sel.ids[r.id] then sel.count else 1
+	local one = count == 1
+	local folder = one and r.dir
+
+	local items: { Node } = {
+		entry("Open", function()
+			ui.invoke("open_selection")
+		end, { icon = "external", key = function()
+			return "Enter"
+		end }),
+	}
+	if folder and not zip then
+		table.insert(items, entry("Open in new tab", function()
+			ui.invoke("open_new_tab", i)
+		end, { icon = "plus" }))
+	end
+	table.insert(items, line())
+	if not zip then
+		table.insert(items, entry("Cut", commands.cut, { icon = "cut", key = key("cut") }))
+	end
+	table.insert(items, entry("Copy", commands.copy, { icon = "copy", key = key("copy") }))
+	if folder and not zip and state.clipboard:peek().count > 0 then
+		table.insert(items, entry("Paste into folder", function()
+			ui.invoke("paste_into", i)
+		end, { icon = "paste" }))
+	end
+	table.insert(items, entry("Copy path", commands.copy_path, { icon = "link", key = key("copy_path") }))
+	if zip then
+		return items
+	end
+	table.insert(items, line())
+	if one then
+		table.insert(items, entry("Rename", commands.rename, { icon = "rename", key = key("rename") }))
+	end
+	table.insert(items, entry("Delete", function()
+		commands.delete(ui.modifiers.shift:peek())
+	end, { icon = "trash", danger = true, key = key("delete") }))
+	if folder and n ~= nil and not n.search then
+		table.insert(items, line())
+		table.insert(items, entry("Pin to Quick access", function()
+			ui.invoke("pin", state.path_of(r.id))
+		end, { icon = "pin" }))
+	end
+	table.insert(items, line())
+	table.insert(items, entry("Show more options", function()
+		ui.invoke("shell_menu")
+	end, { icon = "more" }))
+	return items
+end
+
+-- The menu for the folder itself (a right-click on empty space).
+local function folder_menu(): { Node }?
+	local n = state.nav:peek()
+	if n == nil or n.this_pc or n.overview then
+		return nil
+	end
+	local entry, line, sub = common.menu_entry, common.menu_line, common.menu_sub
+	ui.invoke("select_none")
+
+	local function view_is(v: string): () -> boolean
+		return function()
+			return state.view() == v
+		end
+	end
+	local function sort_is(k: string): () -> boolean
+		return function()
+			local nav = state.nav:get()
+			return nav ~= nil and nav.sort == k
+		end
+	end
+	local function set_view(v: string): () -> ()
+		return function()
+			ui.invoke("set_view", v)
+		end
+	end
+	local function sort_by(k: string): () -> ()
+		return function()
+			-- Sorting by the key already used flips the order: not from here.
+			local nav = state.nav:peek()
+			if nav == nil or nav.sort ~= k then
+				ui.invoke("sort", k)
+			end
+		end
+	end
+
+	local items: { Node } = {
+		sub("View", sub_view, {
+			entry("Details", set_view("details"), { checked = view_is("details") }),
+			entry("List", set_view("list"), { checked = view_is("list") }),
+			entry("Grid", set_view("grid"), { checked = view_is("grid") }),
+		}, "grid"),
+		sub("Sort by", sub_sort, {
+			entry("Name", sort_by("name"), { checked = sort_is("name") }),
+			entry("Date", sort_by("date"), { checked = sort_is("date") }),
+			entry("Type", sort_by("type"), { checked = sort_is("type") }),
+			entry("Size", sort_by("size"), { checked = sort_is("size") }),
+		}, "sort"),
+	}
+
+	if n.recycle then
+		if state.rows:len() > 0 then
+			table.insert(items, line())
+			table.insert(items, entry("Empty Recycle Bin", commands.empty_bin, { icon = "trash", danger = true }))
+		end
+		return items
+	end
+
+	local writable = not n.zip and not n.search
+	if writable then
+		table.insert(items, line())
+		if state.clipboard:peek().count > 0 then
+			table.insert(items, entry(clipboard_words(), commands.paste, { icon = "paste", key = key("paste") }))
+		end
+		table.insert(
+			items,
+			sub("New", sub_new, {
+				entry("Folder", commands.new_folder, { icon = "folder_plus", key = key("new_folder") }),
+				entry("Text document", function()
+					commands.new_file("text")
+				end, { icon = "doc" }),
+				entry("Markdown document", function()
+					commands.new_file("markdown")
+				end, { icon = "doc" }),
+			}, "plus")
+		)
+	end
+	table.insert(items, line())
+	table.insert(items, entry("Select all", function()
+		ui.invoke("select_all")
+	end, { icon = "check", key = key("select_all") }))
+	table.insert(items, entry("Refresh", function()
+		ui.invoke("refresh")
+	end, { icon = "refresh", key = key("refresh") }))
+	if writable then
+		table.insert(items, entry("Pin to Quick access", function()
+			ui.invoke("pin_current")
+		end, { icon = "pin" }))
+		table.insert(items, line())
+		table.insert(items, entry("Show more options", function()
+			ui.invoke("shell_background_menu")
+		end, { icon = "more" }))
+	end
+	return items
+end
 
 -- A grid tile's width and height.
 local function tile_size(): (number, number)
@@ -520,28 +702,10 @@ local function item_handlers(index: () -> number, row: () -> state.Row, whole: b
 			end
 		end,
 		context_menu = function()
-			item_menu_claimed = true
-			ui.invoke("context_menu", index())
-			-- The Recycle Bin's items: Pane's own menu (Rust selected it).
-			if state.in_recycle() then
-				return {
-					ui.menu_item {
-						"Restore",
-						on_click = function()
-							ui.invoke("restore")
-						end,
-					},
-					ui.menu_item {
-						"Delete permanently",
-						on_click = function()
-							commands.purge()
-						end,
-					},
-				}
-			end
-			-- Explorer's own menu was shown natively: no zgx menu.
-			return nil
+			item_menu_at = ui.now()
+			return item_menu(index(), row())
 		end,
+		context_menu_style = common.menu_style,
 	}
 end
 
@@ -1493,16 +1657,15 @@ return function(): Node
 			state.view_w:set(size.w)
 		end,
 		on_key = on_list_key,
-		-- Right-click on empty space: the folder's own menu (New, Paste, ...).
+		-- Right-click on empty space: the folder's own menu (View, Sort, New…).
 		context_menu = function()
-			if item_menu_claimed then
+			if ui.now() - item_menu_at < 100 then
 				-- The same right-click, passed on from an item.
-				item_menu_claimed = false
 				return nil
 			end
-			ui.invoke("background_menu")
-			return nil
+			return folder_menu()
 		end,
+		context_menu_style = common.menu_style,
 		-- Files dropped on empty space land in this folder: from other apps,
 		-- or dragged in Pane from another folder (a folder that sprang open).
 		on_file_drop = function(files)

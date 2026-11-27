@@ -31,6 +31,8 @@ export type Nav = {
 	overview: boolean,
 	-- The Recycle Bin: its items can be restored or deleted for good.
 	recycle: boolean?,
+	-- A folder inside a zip file: read-only.
+	zip: boolean?,
 	sort: string,
 	descending: boolean,
 	view: string,

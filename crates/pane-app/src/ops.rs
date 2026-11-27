@@ -445,6 +445,12 @@ pub fn copy(ops: &OpsRef, app: &AppRef, cut: bool) {
 
 pub fn paste(ops: &OpsRef, app: &AppRef) {
     let Some(dest) = current_folder(app) else { return };
+    paste_to(ops, app, dest);
+}
+
+/// Pastes what's on the clipboard into `dest` (the menu's "Paste into
+/// folder" on a folder in the list).
+pub fn paste_to(ops: &OpsRef, app: &AppRef, dest: PathBuf) {
     let Some((files, cut)) = pane_shell::clipboard::get_files(hwnd()) else {
         return;
     };

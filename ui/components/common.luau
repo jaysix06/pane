@@ -86,44 +86,131 @@ function M.thumbnail(thumb: () -> string, icon: () -> string, dir: () -> boolean
 	}
 end
 
--- A menu entry with a check column.
+-- A menu entry with a check column (drawn as every menu row: menu_entry).
 function M.check_item(label: string, checked: () -> boolean, on_click: () -> ()): Node
-	return ui.menu_item {
-		label = label,
-		on_click = on_click,
-		ui.row {
-			gap = 8,
-			items = "center",
-			ui.div {
-				w = 14,
-				color = "$accent",
-				ui.show(checked, icons.icon("check", 14)),
-			},
-			ui.text { label },
-		},
-	}
+	return M.menu_entry(label, on_click, { checked = checked })
 end
 
 -- A plain menu entry, lined up with check items (an icon in their column).
 function M.menu_item(label: string, on_click: () -> (), icon: string?): Node
-	return ui.menu_item {
+	return M.menu_entry(label, on_click, { icon = icon })
+end
+
+-- A line between groups in a `ui.menu`.
+function M.separator(): Node
+	return ui.div { h = 1, my = 4, mx = 6, bg = "$border.subtle" }
+end
+
+-- Menus -------------------------------------------------------------------
+-- Every menu in Pane (right-click, the toolbar's, the sidebar's) is drawn
+-- the same way: a raised warm panel with the machined top edge, rows with
+-- an icon column, the label and the key that does it in mono.
+
+-- The panel's look: `context_menu_style` on whatever opens one.
+M.menu_style = {
+	min_w = 220,
+	p = 4,
+	gap = 0,
+	items = "stretch",
+	rounded = "$radius.lg",
+	bg = "$surface.overlay",
+	border = 1,
+	border_color = "$border.subtle",
+	shadow = "$shadow.lg",
+	inset_shadow = { x = 0, y = 1, color = "$app.highlight" },
+}
+
+-- The same look as props for a `ui.menu` / `ui.submenu`.
+function M.menu_props(props: { [any]: any }): { [any]: any }
+	for k, v in M.menu_style do
+		if props[k] == nil then
+			props[k] = v
+		end
+	end
+	return props
+end
+
+-- One row's look: its height, padding and hover.
+local function entry_look(props: { [any]: any }): { [any]: any }
+	props.h = 28
+	props.px = 8
+	props.rounded = "$radius.md"
+	props.text_size = 13
+	props.color = "$text.primary"
+	props.bg = "#00000000"
+	props.hover = { bg = "$hover" }
+	props.focus = { bg = "$hover", border = 0 }
+	return props
+end
+
+export type EntryOptions = {
+	-- One of Pane's icons, in the icon column.
+	icon: string?,
+	-- A check in the icon column while true (instead of the icon).
+	checked: (() -> boolean)?,
+	-- The key that does it ("Ctrl+C"), shown at the end.
+	key: (() -> string)?,
+	-- Destructive: the icon and label in the danger colour.
+	danger: boolean?,
+	-- Ends in a "›" (a submenu's row).
+	more: boolean?,
+}
+
+-- A menu row: [icon] label ........ key
+function M.menu_entry(label: string, on_click: (() -> ())?, opts: EntryOptions?): Node
+	local o: EntryOptions = opts or {}
+	local tint = if o.danger then "$danger" else "$text.secondary"
+	local mark: Node = if o.checked
+		then ui.div {
+			w = 14,
+			color = "$accent",
+			ui.show(o.checked, icons.icon("check", 14)),
+		}
+		else ui.div {
+			w = 14,
+			color = tint,
+			ui.show(o.icon ~= nil, icons.icon(o.icon or "dots", 14)),
+		}
+	return ui.menu_item(entry_look {
 		label = label,
 		on_click = on_click,
 		ui.row {
-			gap = 8,
+			gap = 9,
 			items = "center",
-			ui.div {
-				w = 14,
-				color = "$text.tertiary",
-				ui.show(icon ~= nil, icons.icon(icon or "dots", 14)),
-			},
-			ui.text { label },
+			w_full = true,
+			mark,
+			ui.text { label, grow = 1, color = if o.danger then "$danger" else "$text.primary" },
+			if o.key
+				then ui.text {
+					o.key,
+					font = "$font.mono",
+					text_size = 11,
+					color = "$text.tertiary",
+					pl = 20,
+				}
+				else nil,
+			if o.more then ui.div { color = "$text.tertiary", pl = 12, icons.icon("chevron", 12) } else nil,
 		},
-	}
+	})
 end
 
-function M.separator(): Node
-	return ui.div { h = 1, my = 4, bg = "$border.subtle" }
+-- A submenu: a row with "›" that opens `items` beside it. `open` is a
+-- state the menu writes back as it closes.
+function M.menu_sub(label: string, open: any, items: { Node }, icon: string?): Node
+	local props = M.menu_props {
+		open = open,
+		label = label,
+		trigger = M.menu_entry(label, nil, { icon = icon, more = true }),
+	}
+	for _, it in items do
+		table.insert(props, it)
+	end
+	return ui.submenu(props)
+end
+
+-- A line between groups of rows.
+function M.menu_line(): Node
+	return ui.separator { h = 1, my = 4, mx = 6, bg = "$border.subtle" }
 end
 
 -- A raised card with Pane's machined top edge.
