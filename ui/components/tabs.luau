@@ -6,10 +6,31 @@ local state = require("../state")
 local common = require("./common")
 local icons = require("./icons")
 
-local function tab_view(tab: state.Tab, index: number): Node
+-- Where the tab with `id` is in the strip now (1-based), or nil. A row is
+-- kept while its tab stays open, so the index it was built with goes stale
+-- when a tab before it closes: look it up when it's needed.
+local function index_of(id: number): number?
+	for i, t in state.tabs:get() do
+		if t.id == id then
+			return i
+		end
+	end
+	return nil
+end
+
+local function tab_view(tab: state.Tab): Node
 	local active = ui.computed(function()
-		return state.active:get() == index
+		return index_of(tab.id) == state.active:get()
 	end)
+	-- Runs `action` with this tab's current index.
+	local function on_tab(action: string): () -> ()
+		return function()
+			local i = index_of(tab.id)
+			if i then
+				ui.invoke(action, i)
+			end
+		end
+	end
 	local overview = tab.path == "::overview"
 	return ui.row {
 		role = "tab",
@@ -36,11 +57,11 @@ local function tab_view(tab: state.Tab, index: number): Node
 			return if active:get() then "$text.primary" else "$text.secondary"
 		end,
 		hover = { bg = "$hover" },
-		on_click = ui.action("switch_tab", index),
+		on_click = on_tab("switch_tab"),
 		-- Middle click closes, as in a browser.
 		on_aux_click = function(e)
 			if e.button == "middle" then
-				ui.invoke("close_tab", index)
+				on_tab("close_tab")()
 			end
 		end,
 		ui.div {
@@ -54,7 +75,7 @@ local function tab_view(tab: state.Tab, index: number): Node
 		ui.button {
 			label = "Close tab",
 			tooltip = "Close tab (Ctrl+W)",
-			on_click = ui.action("close_tab", index),
+			on_click = on_tab("close_tab"),
 			w = 22,
 			h = 22,
 			p = 0,
@@ -137,9 +158,13 @@ return function(): Node
 			gap = 2,
 			items = "end",
 			h_full = true,
-			ui.each(state.tabs, function(tab: state.Tab, index: number)
-				return tab_view(tab, index)
-			end),
+			ui.each(state.tabs, function(tab: state.Tab)
+				return tab_view(tab)
+			end, {
+				key = function(tab: state.Tab)
+					return tab.id
+				end,
+			}),
 		},
 		ui.row {
 			shrink = 0,

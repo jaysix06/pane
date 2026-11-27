@@ -221,10 +221,13 @@ local function pinned_list(): Node
 	local pins = ui.computed(function(): { string }
 		return state.setting("pinned") or {}
 	end)
-	local function move(i: number, by: number)
+	-- By path, not by the row's index: a row is kept as its pin moves, so
+	-- the index it was built with goes stale after the first move.
+	local function move(path: string, by: number)
 		local list = table.clone(pins:peek())
-		local j = i + by
-		if j < 1 or j > #list then
+		local i = table.find(list, path)
+		local j = (i or 0) + by
+		if not i or j < 1 or j > #list then
 			return
 		end
 		list[i], list[j] = list[j], list[i]
@@ -241,7 +244,7 @@ local function pinned_list(): Node
 			text_size = 12.5,
 			wrap = true,
 		}),
-		ui.each(pins, function(path: string, index: number)
+		ui.each(pins, function(path: string)
 			return ui.row {
 				w_full = true,
 				h = 36,
@@ -253,10 +256,10 @@ local function pinned_list(): Node
 				ui.div { color = "$accent", icons.icon("folder", 14) },
 				ui.text { path, literal = true, grow = 1, min_w = 0, truncate = true, font = "$font.mono", text_size = 12 },
 				button("Up", function()
-					move(index, -1)
+					move(path, -1)
 				end, { h = 26, px = 8 }),
 				button("Down", function()
-					move(index, 1)
+					move(path, 1)
 				end, { h = 26, px = 8 }),
 				button("Unpin", function()
 					ui.invoke("unpin", path)
