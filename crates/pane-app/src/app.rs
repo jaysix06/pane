@@ -1438,12 +1438,12 @@ async fn places_loop(app: AppRef) {
 pub fn refresh_places(app: &AppRef) {
     let (tx, rx) = futures_channel::oneshot::channel();
     std::thread::spawn(move || {
-        let _ = tx.send((pane_shell::known_folders(), pane_shell::drives()));
+        let _ = tx.send((pane_shell::known_folders(), pane_shell::drives(), pane_shell::recycle_bin_info()));
     });
     let app = app.clone();
     let tasks = app.borrow().tasks.clone();
     tasks.spawn(async move {
-        let Ok((known, drives)) = rx.await else { return };
+        let Ok((known, drives, recycle)) = rx.await else { return };
         let a = app.borrow();
         let s = &a.settings;
         let place = |label: &str, path: &Path, extra: Vec<(&str, Value)>| {
@@ -1506,8 +1506,27 @@ pub fn refresh_places(app: &AppRef) {
             ("known", Value::List(Rc::from(known))),
             ("drives", Value::List(Rc::from(drives))),
             ("show_drives", Value::from(s.sidebar_drives)),
+            ("recycle", recycle_value(recycle, s.sidebar_recycle_bin)),
         ]));
     });
+}
+
+/// The sidebar's Recycle Bin row: `{ count, detail }` ("12 items · 340 MB",
+/// "Empty"), or nil when it's hidden.
+fn recycle_value(info: Option<(u64, u64)>, shown: bool) -> Value {
+    if !shown {
+        return Value::Nil;
+    }
+    let detail = match info {
+        Some((0, _)) => "Empty".to_string(),
+        Some((1, bytes)) => format!("1 item · {}", pane_fs::format_size(bytes)),
+        Some((n, bytes)) => format!("{n} items · {}", pane_fs::format_size(bytes)),
+        None => String::new(),
+    };
+    Value::record([
+        ("count", Value::from(info.map_or(0.0, |(n, _)| n as f64))),
+        ("detail", Value::from(detail.as_str())),
+    ])
 }
 
 // ---------------------------------------------------------------- publishing

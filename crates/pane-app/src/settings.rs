@@ -75,6 +75,7 @@ pub struct Settings {
     pub sidebar_quick_access: bool,
     pub sidebar_known_folders: bool,
     pub sidebar_drives: bool,
+    pub sidebar_recycle_bin: bool,
     pub pinned: Vec<String>,
 
     // Thumbnails & preview
@@ -140,6 +141,7 @@ impl Default for Settings {
             sidebar_quick_access: true,
             sidebar_known_folders: true,
             sidebar_drives: true,
+            sidebar_recycle_bin: true,
             pinned: Vec::new(),
             thumbnails: true,
             thumbnails_network: false,

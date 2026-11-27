@@ -53,7 +53,14 @@ export type Place = {
 }
 -- Drives are always listed (the footer needs them); `show_drives` says
 -- whether the sidebar shows them.
-export type Places = { pinned: { Place }, known: { Place }, drives: { Place }, show_drives: boolean? }
+export type Places = {
+	pinned: { Place },
+	known: { Place },
+	drives: { Place },
+	show_drives: boolean?,
+	-- The Recycle Bin row: { count, detail } ("12 items · 340 MB"), nil when hidden.
+	recycle: { count: number, detail: string }?,
+}
 -- The footer's selection cell: "14 items", "3 selected", "13 KB" ("" when not shown).
 export type Status = { items: string?, selected: string?, size: string? }
 -- The selection: ids, how many, the focused row, files and folders among

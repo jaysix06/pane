@@ -381,6 +381,20 @@ fn register_ops_actions(host: &ScriptHost, app: &AppRef, ops: &ops::OpsRef) {
         };
         ops::drop_files(o, a, paths, target, flag(arg, "copy"));
     });
+    // The sidebar's Recycle Bin: opened in File Explorer, and files dropped
+    // on it ({ paths }) go there, as Delete sends them.
+    on("open_recycle_bin", |a, _, _| {
+        if !pane_shell::open_recycle_bin() {
+            a.borrow().toast("File Explorer couldn't open the Recycle Bin.");
+        }
+    });
+    on("recycle", |a, o, arg| {
+        let paths: Vec<PathBuf> = match arg.field("paths") {
+            Some(Value::List(items)) => items.iter().filter_map(str_arg).map(PathBuf::from).collect(),
+            _ => Vec::new(),
+        };
+        ops::recycle(o, a, paths);
+    });
     // The shell's menu for the row right-clicked (and the rest of the
     // selection when it is part of it).
     on("context_menu", |a, o, arg| {
@@ -493,9 +507,10 @@ fn register_storage_actions(host: &ScriptHost, app: &AppRef, storage: &storage::
             ops::purge_contents(&ops, &app, folders, Box::new(move |_| storage::rescan(&s2)));
         });
     }
-    on("empty_recycle_bin", |_, s, _| {
+    on("empty_recycle_bin", |a, s, _| {
         if pane_shell::empty_recycle_bin(pane_shell::active_window()) {
             storage::recycle_bin_emptied(s);
+            app::refresh_places(a);
         }
     });
 }

@@ -489,10 +489,11 @@ local function selection_commands(): Node
 	}
 end
 
--- More to make than a folder: files of a few kinds.
+-- Everything to make in the folder: a folder (Ctrl+Shift+N), or a file of
+-- a few kinds. On the command row's right, beside Sort, in folders only.
 local function new_menu(): Node
 	local open = ui.state("new_menu_open", false)
-	local function item(label: string, icon: string, run: () -> ()): Node
+	local function item(label: string, icon: string, run: () -> (), key: (() -> string)?): Node
 		return ui.menu_item {
 			label = label,
 			on_click = function()
@@ -502,8 +503,12 @@ local function new_menu(): Node
 			ui.row {
 				gap = 8,
 				items = "center",
+				w_full = true,
 				ui.div { color = "$text.secondary", icons.icon(icon, 15) },
-				ui.text { label },
+				ui.text { label, grow = 1 },
+				if key
+					then ui.text { key, font = "$font.mono", text_size = 11, color = "$text.tertiary", pl = 16 }
+					else nil,
 			},
 		}
 	end
@@ -512,7 +517,7 @@ local function new_menu(): Node
 		label = "New",
 		anchor = ui.button {
 			label = "New",
-			tooltip = ui.text { "New file" },
+			tooltip = ui.text { "New folder or file" },
 			tooltip_placement = { side = "bottom", align = "center", offset = 6 },
 			on_click = ui.toggle(open),
 			h = 30,
@@ -528,7 +533,7 @@ local function new_menu(): Node
 			ui.div { color = "$text.secondary", icons.icon("plus", 15) },
 			ui.text { "New", text_size = 13 },
 		},
-		item("Folder", "folder", commands.new_folder),
+		item("Folder", "folder_plus", commands.new_folder, hint("new_folder")),
 		item("Text document", "doc", function()
 			commands.new_file("text")
 		end),
@@ -538,20 +543,12 @@ local function new_menu(): Node
 	}
 end
 
--- Commands for the folder itself, with nothing selected: a new folder, and
--- pasting what's on the clipboard (only while it holds files).
+-- Commands for the folder itself, with nothing selected: pasting what's
+-- on the clipboard (only while it holds files). New is on the right.
 local function folder_commands(): Node
 	return ui.row {
 		gap = 6,
 		items = "center",
-		text_button {
-			label = "New folder",
-			icon = "folder_plus",
-			primary = true,
-			tooltip = hint("new_folder"),
-			on_click = commands.new_folder,
-		},
-		new_menu(),
 		ui.show(
 			function()
 				return state.clipboard:get().count > 0
@@ -757,6 +754,11 @@ return function(): Node
 				items = "center",
 				command_row_left(),
 				ui.div { grow = 1, min_w = 8 },
+				-- New: in a folder (not This PC or search results).
+				ui.show(function()
+					local n = state.nav:get()
+					return n ~= nil and not n.this_pc and not n.search
+				end, new_menu()),
 				sort_menu(),
 				view_switch(),
 				common.icon_button {

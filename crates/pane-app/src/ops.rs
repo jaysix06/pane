@@ -430,6 +430,21 @@ pub fn delete(ops: &OpsRef, app: &AppRef, permanent: bool, confirmed: bool) {
     run(ops, app, Op::Delete { paths, permanent }, label, "delete", None);
 }
 
+/// Files dropped on the sidebar's Recycle Bin: to the bin, as Delete does
+/// (Windows asks first, as its own confirmation setting says). Not from
+/// inside a zip, which is read-only.
+pub fn recycle(ops: &OpsRef, app: &AppRef, paths: Vec<PathBuf>) {
+    let paths: Vec<PathBuf> = paths.into_iter().filter(|p| !app::in_zip(p) && p.exists()).collect();
+    if paths.is_empty() {
+        return;
+    }
+    let label = format!(
+        "Moving to Recycle Bin: {}",
+        if paths.len() == 1 { folder_name(&paths[0]) } else { count(paths.len(), "item") }
+    );
+    run(ops, app, Op::Delete { paths, permanent: false }, label, "delete", None);
+}
+
 pub fn rename(ops: &OpsRef, app: &AppRef, index: usize, name: &str) {
     if app::showing_zip(app) {
         app.borrow().toast(READ_ONLY_ZIP);

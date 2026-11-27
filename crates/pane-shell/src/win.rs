@@ -4,7 +4,7 @@ use std::path::Path;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx};
 use windows::Win32::UI::Input::KeyboardAndMouse::GetActiveWindow;
-use windows::Win32::UI::Shell::{SHEmptyRecycleBinW, ShellExecuteW};
+use windows::Win32::UI::Shell::{SHEmptyRecycleBinW, SHQUERYRBINFO, SHQueryRecycleBinW, ShellExecuteW};
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 use windows::core::{PCWSTR, w};
 
@@ -77,6 +77,22 @@ pub fn empty_recycle_bin(hwnd: HWND) -> bool {
     // SAFETY: no strings passed (None = all drives); flags 0 keep Windows'
     // confirmation, progress and sound.
     unsafe { SHEmptyRecycleBinW(Some(hwnd), None, 0) }.is_ok()
+}
+
+/// What the Recycle Bin holds, on every drive: (items, bytes). None if
+/// Windows won't say.
+pub fn recycle_bin_info() -> Option<(u64, u64)> {
+    let mut info = SHQUERYRBINFO { cbSize: size_of::<SHQUERYRBINFO>() as u32, ..Default::default() };
+    // SAFETY: no root (every drive); `info` is sized.
+    unsafe { SHQueryRecycleBinW(PCWSTR::null(), &mut info) }.ok()?;
+    Some((info.i64NumItems.max(0) as u64, info.i64Size.max(0) as u64))
+}
+
+/// Opens the Recycle Bin in File Explorer, which can restore what's in it
+/// (Pane doesn't browse it). explorer.exe itself, so it never comes back
+/// to Pane as the default file manager.
+pub fn open_recycle_bin() -> bool {
+    std::process::Command::new("explorer.exe").arg("shell:RecycleBinFolder").spawn().is_ok()
 }
 
 /// "Windows 11 Pro 24H2 (build 26100.4061)", for the About dialog's

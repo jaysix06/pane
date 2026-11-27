@@ -37,7 +37,18 @@ local function row(props: {
 	title: Node?,
 	menu: (() -> { Node })?,
 	h: number?,
+	-- A row that isn't a place to go (the Recycle Bin): what a click does,
+	-- and what files dropped on it do.
+	on_open: (() -> ())?,
+	on_paths: ((paths: { string }) -> ())?,
 }): Node
+	local function take(paths: { string })
+		if props.on_paths then
+			props.on_paths(paths)
+		elseif string.sub(props.path, 1, 2) ~= "::" then
+			ui.invoke("drop", { paths = paths, target = props.path, copy = ui.modifiers.control:peek() })
+		end
+	end
 	return ui.row {
 		role = "link",
 		label = props.label,
@@ -57,30 +68,37 @@ local function row(props: {
 			return if props.here() then "$text.primary" else "$text.secondary"
 		end,
 		hover = { bg = "$hover", color = "$text.primary" },
-		on_click = open_place(props.path),
+		on_click = if props.on_open
+			then function()
+				(props.on_open :: () -> ())()
+			end
+			else open_place(props.path),
 		-- A place takes dropped files (moved within a drive, copied across)
 		-- and opens when a drag rests on it.
 		drop_when = function(payload: any)
-			return type(payload) == "table" and payload.paths ~= nil and string.sub(props.path, 1, 2) ~= "::"
+			return type(payload) == "table"
+				and payload.paths ~= nil
+				and (props.on_paths ~= nil or string.sub(props.path, 1, 2) ~= "::")
 		end,
 		on_drop = function(payload: any)
-			ui.invoke("drop", { paths = payload.paths, target = props.path, copy = ui.modifiers.control:peek() })
+			take(payload.paths)
 		end,
 		on_file_drop = function(files)
 			local paths = {}
 			for _, f in files do
 				table.insert(paths, f.path)
 			end
-			if string.sub(props.path, 1, 2) ~= "::" then
-				ui.invoke("drop", { paths = paths, target = props.path, copy = ui.modifiers.control:peek() })
-			end
+			take(paths)
 		end,
 		on_drag_spring = function()
+			if props.on_open then
+				return false
+			end
 			ui.invoke("navigate", props.path)
 			return true
 		end,
 		on_aux_click = function(e)
-			if e.button == "middle" then
+			if e.button == "middle" and not props.on_open then
 				ui.invoke("navigate_new_tab", props.path)
 			end
 		end,
@@ -221,6 +239,73 @@ local function drive_row(place: state.Place): Node
 			},
 		},
 	}
+end
+
+-- The Recycle Bin: how full it is; a click opens it in File Explorer
+-- (which restores from it), files dropped on it go there.
+local function recycle_info(): any
+	local p = state.places:get()
+	return if p then (p :: any).recycle else nil
+end
+
+local function recycle_row(): Node
+	return ui.show(
+		function()
+			return recycle_info() ~= nil
+		end,
+		ui.column {
+			w_full = true,
+			pb = 12,
+			row {
+				label = "Recycle Bin",
+				path = "::recycle",
+				here = function()
+					return false
+				end,
+				icon = ui.div { color = "$text.secondary", icons.icon("trash", 18) },
+				h = 44,
+				extra = ui.text {
+					function()
+						local r = recycle_info()
+						return if r then r.detail else ""
+					end,
+					font = "$font.mono",
+					text_size = 10.5,
+					color = "$text.tertiary",
+					truncate = true,
+				},
+				on_open = function()
+					ui.invoke("open_recycle_bin")
+				end,
+				on_paths = function(paths: { string })
+					ui.invoke("recycle", { paths = paths })
+				end,
+				menu = function()
+					local items = {
+						ui.menu_item {
+							"Open in File Explorer",
+							on_click = function()
+								ui.invoke("open_recycle_bin")
+							end,
+						},
+					}
+					local r = recycle_info()
+					if r and r.count > 0 then
+						table.insert(
+							items,
+							ui.menu_item {
+								"Empty Recycle Bin",
+								on_click = function()
+									ui.invoke("empty_recycle_bin")
+								end,
+							}
+						)
+					end
+					return items
+				end,
+			},
+		}
+	)
 end
 
 local function section(title: string, list: () -> { state.Place }, build: (state.Place) -> Node): Node
@@ -426,6 +511,7 @@ return function(): Node
 		},
 		section("Quick access", places_field("pinned"), place_row),
 		section("Folders", places_field("known"), place_row),
+		recycle_row(),
 		ui.column {
 			w_full = true,
 			gap = 1,

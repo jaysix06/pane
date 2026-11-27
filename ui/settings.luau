@@ -484,6 +484,7 @@ local pages: { Page } = {
 		rows = {
 			toggle("sidebar_quick_access", "Show pinned folders"),
 			toggle("sidebar_known_folders", "Show Home, Desktop, Downloads and the other folders"),
+			toggle("sidebar_recycle_bin", "Show the Recycle Bin", "How full it is; a click opens it in File Explorer."),
 			toggle("sidebar_drives", "Show drives"),
 			{
 				label = "Pinned folders",

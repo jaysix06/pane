@@ -32,7 +32,10 @@ pub use log::log_to_file;
 #[cfg(windows)]
 pub use places::{Drive, DriveKind, Place, drives, is_network_path, known_folders};
 #[cfg(windows)]
-pub use win::{active_window, empty_recycle_bin, init_com, open_path, run_elevated_and_wait, windows_version};
+pub use win::{
+    active_window, empty_recycle_bin, init_com, open_path, open_recycle_bin, recycle_bin_info, run_elevated_and_wait,
+    windows_version,
+};
 
 #[cfg(all(test, windows))]
 mod tests {
