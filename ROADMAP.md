@@ -2,7 +2,7 @@
 
 Where Pane is and what comes next. Latest release: **0.4.1** (the sidebar runs up to the navigation bar and the command row shows the folder's name; 0.4.0 brought the Recycle Bin inside Pane, and Pane's own right-click menus; 0.3.0 brought drag-select, resizable columns and preview pane, item checkboxes, instant whole-drive search and zip browsing; 0.2.x brought Settings, folder search, session restore, the folder view redesign, and Milestone 6's polish and performance).
 
-**In 0.4.1:** the command row sits over the folder view only, so the sidebar runs up to the navigation bar with no empty strip above it, and the row's left side shows the folder's name and item count while nothing is selected. Checked on screen in the dev build in a folder; not with a selection or in the Recycle Bin.
+**In 0.4.1:** the command row sits over the folder view only, so the sidebar runs up to the navigation bar with no empty strip above it, and the row's left side shows the folder's name and item count while nothing is selected. Checked on screen in a folder, with a selection and in the Recycle Bin.
 
 **In 0.4.0:** the Recycle Bin in Pane (browse, restore, delete for good, empty), Pane's own right-click menus with Explorer's behind Show more options, Copy path (Ctrl+Shift+C), Paste into folder, and a fix for a drag-select rectangle that started after double-clicking into a folder (each below). The menus and the double-click fix were checked on screen in the dev build; the Recycle Bin view was not.
 
